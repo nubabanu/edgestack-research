@@ -99,7 +99,8 @@ turnover/exposure-matched random-signal controls.
 
 ## 5. Costs
 
-Costs are applied during discovery. The baseline has zero commission, a quoted full
+Costs are applied during discovery to the frozen $100,000 research portfolio. The
+baseline has zero commission, a quoted full
 spread of 1 bp for ETFs or 3 bps for equities with half charged per fill, and per-side
 slippage
 
@@ -121,8 +122,8 @@ HAC lag is
 min(T - 1, max(holding_period - 1, floor(4 * (T / 100) ** (2 / 9)))).
 ```
 
-A discovery survivor has directed net mean greater than zero, directed HAC
-`t > 3`, global Benjamini-Hochberg FDR at `q = 0.05`, and deflated-Sharpe
+A `FROZEN_V1` discovery survivor has directed net mean greater than zero, directed
+HAC `t > 3`, global Benjamini-Hochberg FDR at `q = 0.05`, and deflated-Sharpe
 probability greater than 0.95. Bonferroni is reported as a conservative reference.
 If more than 5% of tested hypotheses survive the `t + FDR` filters, the campaign
 stops for a frozen diagnostic audit rather than celebrating an implausibly broad
@@ -133,6 +134,17 @@ eligible hypotheses and 10,000 for finalists. Shared paths preserve dependence
 between strategies. White Reality Check and Hansen SPA use 10,000 draws. PSR and DSR
 adjust for sample size, skewness, kurtosis, and the number/distribution of trials;
 they are model-risk diagnostics, not posterior probabilities of profit.
+
+`LITERATURE_V2` is a separately hashed, explicitly
+`POST_REPLICATION_PRE_DISCOVERY` protocol. It raises the directed hurdle to 3.8
+for calendar/time-series rules and 3.4 for cross-sectional rules, following
+Chordia, Goyal, and Saretto (2020). It also requires a studentized stationary
+Romano-Wolf max-t stepdown result at family-wise alpha 0.05 across every
+preregistered real rule. Finalist Sharpe and benchmark-relative Sharpe-difference
+intervals use a studentized time-series bootstrap with a HAC influence-function
+studentizer, following Ledoit and Wolf (2008). Capital curves at $100,000,
+$1 million, $10 million, and $100 million expose participation-impact capacity;
+they do not create or rescale gross alpha.
 
 ## 7. Validation and overfitting controls
 
@@ -240,6 +252,14 @@ All six checks must pass on clean data before discovery begins:
 
 The FOMC event-week feature means the week containing the scheduled announcement;
 it is distinct from the contaminated daily replication proxy.
+
+The table remains the immutable empirical result for `FROZEN_V1` campaigns.
+`LITERATURE_V2` does not turn a miss into a match: all six checks must execute and
+produce numerical evidence, but a clean empirical miss is retained as adverse
+diagnostic evidence rather than being misclassified as a software/data-engine
+failure. A missing, invalid, or nonnumerical check still blocks the V2 gate. This
+interpretation was versioned after the original replication result and before the
+V2 discovery run, and that timing is embedded in the campaign manifest.
 
 ## 14. Interpreting a stopped or empty campaign
 

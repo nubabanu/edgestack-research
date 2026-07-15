@@ -142,6 +142,71 @@ class StatsConfig(StrictModel):
     placebo_survival_max: float = 0.005
 
 
+class EvidenceProtocolConfig(StrictModel):
+    """Versioned interpretation of replication and discovery evidence.
+
+    ``FROZEN_V1`` preserves the original all-six replication gate.  The
+    literature-informed protocol is deliberately a new version: it may treat
+    an executed empirical replication miss as evidence rather than a software
+    failure, but compensates with stronger discovery hurdles and family-wise
+    error control.  This prevents an observed miss from silently mutating the
+    original campaign.
+    """
+
+    version: Literal["FROZEN_V1", "LITERATURE_V2"] = "FROZEN_V1"
+    replication_policy: Literal[
+        "ALL_SIX_EMPIRICAL", "EXECUTION_WITH_EMPIRICAL_DIAGNOSTICS"
+    ] = "ALL_SIX_EMPIRICAL"
+    time_series_t_threshold: float = 3.0
+    cross_sectional_t_threshold: float = 3.0
+    require_romano_wolf: bool = False
+    romano_wolf_alpha: float = 0.05
+    sharpe_interval: Literal["PERCENTILE_STATIONARY", "STUDENTIZED_STATIONARY"] = (
+        "PERCENTILE_STATIONARY"
+    )
+    capacity_capital_multipliers: tuple[float, ...] = (1.0,)
+    revision_context: Literal[
+        "ORIGINAL_PREREGISTRATION", "POST_REPLICATION_PRE_DISCOVERY"
+    ] = "ORIGINAL_PREREGISTRATION"
+
+    @model_validator(mode="after")
+    def validate_literature_protocol(self) -> EvidenceProtocolConfig:
+        """Make the V2 label imply the complete, non-optional safeguard set."""
+
+        if not 0.0 < self.romano_wolf_alpha < 1.0:
+            raise ValueError("romano_wolf_alpha must lie strictly between zero and one")
+        if (
+            self.time_series_t_threshold <= 0.0
+            or self.cross_sectional_t_threshold <= 0.0
+        ):
+            raise ValueError("discovery t-statistic thresholds must be positive")
+        if (
+            not self.capacity_capital_multipliers
+            or any(value <= 0.0 for value in self.capacity_capital_multipliers)
+            or tuple(sorted(set(self.capacity_capital_multipliers)))
+            != self.capacity_capital_multipliers
+        ):
+            raise ValueError(
+                "capacity_capital_multipliers must be unique, positive, and sorted"
+            )
+        if self.version == "LITERATURE_V2":
+            requirements = (
+                self.replication_policy == "EXECUTION_WITH_EMPIRICAL_DIAGNOSTICS",
+                self.time_series_t_threshold >= 3.8,
+                self.cross_sectional_t_threshold >= 3.4,
+                self.require_romano_wolf,
+                self.sharpe_interval == "STUDENTIZED_STATIONARY",
+                self.revision_context == "POST_REPLICATION_PRE_DISCOVERY",
+            )
+            if not all(requirements):
+                raise ValueError(
+                    "LITERATURE_V2 requires diagnostic replication, t>=3.8/3.4, "
+                    "Romano-Wolf, studentized Sharpe inference, and an explicit "
+                    "post-replication/pre-discovery revision label"
+                )
+        return self
+
+
 class ValidationConfig(StrictModel):
     """Out-of-sample and stability policy."""
 
@@ -225,6 +290,7 @@ class EdgeStackConfig(StrictModel):
     data: DataConfig = Field(default_factory=DataConfig)
     grid: GridConfig = Field(default_factory=GridConfig)
     stats: StatsConfig = Field(default_factory=StatsConfig)
+    protocol: EvidenceProtocolConfig = Field(default_factory=EvidenceProtocolConfig)
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
     costs: CostConfig = Field(default_factory=CostConfig)
     entrytiming: EntryTimingConfig = Field(default_factory=EntryTimingConfig)

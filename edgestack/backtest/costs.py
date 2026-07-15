@@ -21,6 +21,7 @@ from edgestack.stats._types import FloatArray
 class CostAssumptions:
     """Frozen baseline cost assumptions."""
 
+    portfolio_capital: float = 100_000.0
     commission_per_side: float = 0.0
     etf_full_spread_bps: float = 1.0
     equity_full_spread_bps: float = 3.0
@@ -35,6 +36,7 @@ class CostAssumptions:
         """Adapt the shared Pydantic CostConfig without importing it."""
 
         return cls(
+            portfolio_capital=float(config.capital),
             commission_per_side=float(config.commission_per_side),
             etf_full_spread_bps=float(config.etf_full_spread_bps),
             equity_full_spread_bps=float(config.equity_full_spread_bps),
@@ -155,7 +157,7 @@ class CostModel:
         positions: FloatArray,
         *,
         asset_type: Literal["equity", "etf"] | Sequence[str] = "equity",
-        order_dollars: float = 10_000.0,
+        order_dollars: float | None = None,
         adv_dollars: float | FloatArray = 100_000_000.0,
         short_borrow_days: float = 1.0,
         multiplier: float = 1.0,
@@ -174,6 +176,13 @@ class CostModel:
             raise ValueError("positions must be one- or two-dimensional")
         if multiplier < 0.0:
             raise ValueError("multiplier cannot be negative")
+        selected_order_dollars = (
+            self.assumptions.portfolio_capital
+            if order_dollars is None
+            else float(order_dollars)
+        )
+        if selected_order_dollars <= 0.0:
+            raise ValueError("order_dollars must be positive")
         liquidity = np.asarray(adv_dollars, dtype=float)
         if liquidity.ndim == 0:
             liquidity = np.full(weights.shape, float(liquidity))
@@ -206,7 +215,7 @@ class CostModel:
                 self.assumptions.equity_full_spread_bps,
             )[None, :]
         participation = np.divide(
-            trades * order_dollars,
+            trades * selected_order_dollars,
             liquidity,
             out=np.zeros_like(trades),
             where=liquidity > 0.0,
@@ -228,7 +237,7 @@ class CostModel:
         commission_fraction = (
             (trades > 0.0).astype(float)
             * self.assumptions.commission_per_side
-            / order_dollars
+            / selected_order_dollars
         )
         costs = (execution_bps + turnover_bps + borrow_bps).sum(axis=1) / 10_000.0
         costs += commission_fraction.sum(axis=1)
@@ -248,6 +257,37 @@ class CostModel:
         return {
             scale: gross - self.portfolio_costs(positions, multiplier=scale, **kwargs)
             for scale in multipliers
+        }
+
+    def capacity_curve(
+        self,
+        gross_returns: FloatArray,
+        positions: FloatArray,
+        *,
+        capital_multipliers: tuple[float, ...] = (1.0, 10.0, 100.0, 1_000.0),
+        **kwargs: Any,
+    ) -> dict[float, FloatArray]:
+        """Return net streams across explicit portfolio-capital assumptions.
+
+        Scaling capital changes only participation-based impact and commission
+        fractions; signal returns, spreads, borrow, and turnover penalties stay
+        fixed.  This is an implementation-capacity diagnostic, not an alpha
+        source and not a substitute for realized implementation shortfall.
+        """
+
+        if not capital_multipliers or any(
+            value <= 0.0 for value in capital_multipliers
+        ):
+            raise ValueError("capital_multipliers must contain positive values")
+        gross = np.asarray(gross_returns, dtype=float)
+        return {
+            scale: gross
+            - self.portfolio_costs(
+                positions,
+                order_dollars=self.assumptions.portfolio_capital * scale,
+                **kwargs,
+            )
+            for scale in capital_multipliers
         }
 
 

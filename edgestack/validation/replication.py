@@ -136,6 +136,15 @@ class ReplicationSuiteResult:
 
         return tuple(check.name for check in self.checks if not check.passed)
 
+    @property
+    def executed(self) -> bool:
+        """Return true only when all six checks produced numerical evidence."""
+
+        return len(self.checks) == 6 and all(
+            check.statistic is not None and not math.isnan(float(check.statistic))
+            for check in self.checks
+        )
+
 
 def replicate_turn_of_month(market_returns: pd.Series) -> ReplicationCheck:
     """Replicate McConnell and Xu's last-through-third-session TOM premium."""

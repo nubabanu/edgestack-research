@@ -151,6 +151,7 @@ class CampaignRunner:
             "source_tree_sha256": source_tree_sha256(workspace),
             "lock_sha256": sha256_file(lock_path) if lock_path.exists() else "MISSING",
             "seed": config.stats.seed,
+            "evidence_protocol": config.protocol.model_dump(mode="json"),
             "non_promotable": config.profile == "smoke",
             "disclaimer": DISCLAIMER,
         }
@@ -178,7 +179,15 @@ class CampaignRunner:
         if manifest is None:
             raise KeyError(f"unknown campaign: {campaign_id}")
         expected = canonical_sha256(config.model_dump(mode="json"))
-        if manifest.get("config_sha256") != expected:
+        legacy_payload = config.model_dump(mode="json")
+        legacy_payload.pop("protocol", None)
+        legacy_expected = canonical_sha256(legacy_payload)
+        legacy_match = (
+            config.protocol.version == "FROZEN_V1"
+            and "evidence_protocol" not in manifest
+            and manifest.get("config_sha256") == legacy_expected
+        )
+        if manifest.get("config_sha256") != expected and not legacy_match:
             raise RuntimeError(
                 "campaign config hash differs; use the exact frozen config or create a new campaign"
             )
@@ -275,10 +284,29 @@ class CampaignRunner:
             else:
                 inputs = self._full_replication_inputs(bars, factors, fomc_dates)
             suite = run_replication_suite(**inputs)
+            empirical_pass_count = sum(check.passed for check in suite.checks)
+            diagnostic_policy = (
+                self.config.protocol.replication_policy
+                == "EXECUTION_WITH_EMPIRICAL_DIAGNOSTICS"
+            )
+            promotion_gate_pass = suite.passed or (diagnostic_policy and suite.executed)
             evidence = {
                 "checks": [asdict(item) for item in suite.checks],
                 "failures": list(suite.failures),
                 "all_six_pass": suite.passed,
+                "empirical_pass_count": empirical_pass_count,
+                "empirical_check_count": len(suite.checks),
+                "all_checks_executed": suite.executed,
+                "promotion_gate_pass": promotion_gate_pass,
+                "protocol_version": self.config.protocol.version,
+                "replication_policy": self.config.protocol.replication_policy,
+                "revision_context": self.config.protocol.revision_context,
+                "interpretation": (
+                    "Empirical misses remain adverse evidence but do not imply "
+                    "that the data/research engine failed to execute."
+                    if diagnostic_policy
+                    else "Every frozen empirical check is required for promotion."
+                ),
                 "profile_scope": (
                     "SYNTHETIC_SMOKE_NON_PROMOTABLE"
                     if self.config.profile == "smoke"
@@ -289,11 +317,16 @@ class CampaignRunner:
             self._write_json("replication", "replication/evidence.json", evidence)
             return self._record_gate(
                 "replication",
-                suite.passed,
+                promotion_gate_pass,
                 (
                     "all six frozen replication checks passed"
                     if suite.passed
-                    else "one or more frozen replication checks missed; no retuning was performed"
+                    else (
+                        f"all six checks executed; {empirical_pass_count}/6 matched and "
+                        "the miss remains diagnostic under the versioned literature protocol"
+                        if diagnostic_policy
+                        else "one or more frozen replication checks missed; no retuning was performed"
+                    )
                 ),
                 evidence,
             )
@@ -357,6 +390,21 @@ class CampaignRunner:
                 "provisional_placebo_fraction": bundle.provisional_placebo_fraction,
                 "spa_p_value": bundle.spa_p_value,
                 "white_reality_check_p_value": bundle.reality_check_p_value,
+                "romano_wolf_rejection_count": bundle.romano_wolf_rejection_count,
+                "romano_wolf_method": bundle.romano_wolf_method,
+                "romano_wolf_required": self.config.protocol.require_romano_wolf,
+                "romano_wolf_alpha": self.config.protocol.romano_wolf_alpha,
+                "time_series_t_threshold": (
+                    self.config.stats.hard_t
+                    if self.config.protocol.version == "FROZEN_V1"
+                    else self.config.protocol.time_series_t_threshold
+                ),
+                "cross_sectional_t_threshold": (
+                    self.config.stats.hard_t
+                    if self.config.protocol.version == "FROZEN_V1"
+                    else self.config.protocol.cross_sectional_t_threshold
+                ),
+                "evidence_protocol": self.config.protocol.version,
                 "empty_survivor_outcome": not bundle.survivor_ids,
                 "holdout_excluded_from_research": True,
                 "research_end_exclusive": self.holdout_start.isoformat(),

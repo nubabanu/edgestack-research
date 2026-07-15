@@ -15,7 +15,11 @@ from edgestack.validation.regimes import (
     causal_spy_ma200_regimes,
     trend_regime_interaction,
 )
-from edgestack.validation.replication import replicate_short_term_reversal
+from edgestack.validation.replication import (
+    ReplicationCheck,
+    ReplicationSuiteResult,
+    replicate_short_term_reversal,
+)
 from edgestack.validation.walkforward import expanding_window_splits
 
 
@@ -196,3 +200,17 @@ def test_synthetic_one_bar_alpha_collapses_with_extra_lag() -> None:
 def test_reversal_replication_requires_cost_damage() -> None:
     result = replicate_short_term_reversal(np.full(200, 0.001), np.full(200, 0.0004))
     assert result.passed
+
+
+def test_replication_diagnostic_requires_six_numerically_executed_checks() -> None:
+    checks = tuple(
+        ReplicationCheck(str(index), False, float(index), "frozen", {}, "source")
+        for index in range(6)
+    )
+    assert ReplicationSuiteResult(checks).executed
+
+    invalid = (
+        *checks[:-1],
+        ReplicationCheck("invalid", False, np.nan, "frozen", {}, "source"),
+    )
+    assert not ReplicationSuiteResult(invalid).executed

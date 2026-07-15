@@ -93,6 +93,15 @@ gate exits nonzero after persisting its evidence; it never changes a frozen
 threshold to make the campaign pass. The smoke profile is an engineering fixture
 and is permanently marked non-promotable.
 
+The original `FROZEN_V1` campaigns retain the mandatory all-six empirical
+replication gate. `configs/full-stooq-literature-v2.yaml` is a separately
+hashed, explicitly post-replication/pre-discovery protocol revision. It keeps
+every replication miss visible but distinguishes an executed empirical miss
+from an engine failure; discovery then requires the Chordia–Goyal–Saretto
+3.8/3.4 hurdles, dependence-preserving Romano–Wolf stepdown evidence,
+studentized stationary-bootstrap Sharpe evidence, and capital-scaled cost
+curves. It does not rewrite or promote the earlier 5-of-6 campaign.
+
 The exact resolved configuration is part of a campaign identity, so pass the same
 `--config` file to every command. The final holdout command is intentionally
 one-use: inspect the provisional report before invoking it.

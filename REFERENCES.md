@@ -6,6 +6,15 @@ sample. Campaign verdicts come only from frozen, reproducible evidence.
 
 ## Statistical inference and selection bias
 
+- Romano, J. P., & Wolf, M. (2005). Stepwise multiple testing as formalized
+  data snooping. *Econometrica, 73*(4), 1237–1282.
+  [doi:10.1111/j.1468-0262.2005.00615.x](https://doi.org/10.1111/j.1468-0262.2005.00615.x)
+- Ledoit, O., & Wolf, M. (2008). Robust performance hypothesis testing with
+  the Sharpe ratio. *Journal of Empirical Finance, 15*(5), 850–859.
+  [doi:10.1016/j.jempfin.2008.03.002](https://doi.org/10.1016/j.jempfin.2008.03.002)
+- Chordia, T., Goyal, A., & Saretto, A. (2020). Anomalies and false
+  rejections. *The Review of Financial Studies, 33*(5), 2134–2179.
+  [doi:10.1093/rfs/hhaa018](https://doi.org/10.1093/rfs/hhaa018)
 - Bailey, D. H., & López de Prado, M. (2014). The deflated Sharpe ratio: Correcting
   for selection bias, backtest overfitting, and non-normality. *The Journal of
   Portfolio Management, 40*(5), 94–107.
@@ -43,6 +52,16 @@ sample. Campaign verdicts come only from frozen, reproducible evidence.
 
 ## Shrinkage, replication, and trading costs
 
+- Chen, A. Y., & Zimmermann, T. (2022). Open source cross-sectional asset
+  pricing. *Critical Finance Review, 11*(2), 207–264.
+  [doi:10.1561/104.00000112](https://doi.org/10.1561/104.00000112)
+- Jensen, T. I., Kelly, B. T., & Pedersen, L. H. (2023). Is there a replication
+  crisis in finance? *The Journal of Finance, 78*(5), 2465–2518.
+  [doi:10.1111/jofi.13249](https://doi.org/10.1111/jofi.13249)
+- Patton, A. J., & Weller, B. M. (2020). What you see is not what you get: The
+  costs of trading market anomalies. *Journal of Financial Economics, 137*(2),
+  515–549.
+  [doi:10.1016/j.jfineco.2020.02.004](https://doi.org/10.1016/j.jfineco.2020.02.004)
 - Efron, B., & Morris, C. (1973). Stein's estimation rule and its competitors—an
   empirical Bayes approach. *Journal of the American Statistical Association,
   68*(341), 117–130.
@@ -103,4 +122,3 @@ sample. Campaign verdicts come only from frozen, reproducible evidence.
   [Official documentation](https://pandas-market-calendars.readthedocs.io/en/latest/usage.html)
 - Zipline Reloaded 3.1.1 package metadata and supported distributions.
   [PyPI project page](https://pypi.org/project/zipline-reloaded/3.1.1/)
-

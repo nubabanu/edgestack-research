@@ -95,3 +95,22 @@ def test_action_stratified_reconciliation_is_explicitly_versioned() -> None:
         EdgeStackConfig.model_validate(
             {"data": {"reconciliation_method": "silently_blend_prices"}}
         )
+
+
+def test_literature_protocol_is_an_indivisible_versioned_safeguard_set() -> None:
+    config = load_config("configs/full-stooq-literature-v2.yaml")
+    assert config.protocol.version == "LITERATURE_V2"
+    assert config.protocol.require_romano_wolf
+    assert config.protocol.time_series_t_threshold == 3.8
+    assert config.protocol.cross_sectional_t_threshold == 3.4
+
+    with pytest.raises(ValueError, match="LITERATURE_V2 requires"):
+        EdgeStackConfig.model_validate(
+            {
+                "protocol": {
+                    "version": "LITERATURE_V2",
+                    "replication_policy": "EXECUTION_WITH_EMPIRICAL_DIAGNOSTICS",
+                    "revision_context": "POST_REPLICATION_PRE_DISCOVERY",
+                }
+            }
+        )

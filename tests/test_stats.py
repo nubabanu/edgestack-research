@@ -5,12 +5,17 @@ import numpy as np
 from edgestack.stats.bootstrap import (
     stationary_bootstrap_ci,
     stationary_bootstrap_indices,
+    studentized_sharpe_ci,
 )
 from edgestack.stats.deflated_sharpe import (
     deflated_sharpe_ratio,
     probabilistic_sharpe_ratio,
 )
-from edgestack.stats.multiple_testing import benjamini_hochberg, bonferroni
+from edgestack.stats.multiple_testing import (
+    benjamini_hochberg,
+    bonferroni,
+    romano_wolf_stepdown,
+)
 from edgestack.stats.reality_check import hansen_spa, white_reality_check
 from edgestack.stats.tests import hac_mean_test
 
@@ -59,3 +64,43 @@ def test_reality_checks_detect_strong_strategy() -> None:
     assert white.best_strategy == 0
     assert white.p_value < 0.05
     assert spa.p_value < 0.05
+
+
+def test_romano_wolf_stepdown_preserves_joint_dates_and_rejects_signal() -> None:
+    rng = np.random.default_rng(91)
+    common = rng.normal(0.0, 0.01, size=600)
+    common -= common.mean()
+    noise = rng.normal(0.0, 0.002, size=600)
+    noise -= noise.mean()
+    returns = np.column_stack(
+        [
+            common + 0.003,
+            common,
+            0.8 * common + noise,
+        ]
+    )
+    first = romano_wolf_stepdown(returns, n_bootstrap=500, seed=12)
+    second = romano_wolf_stepdown(returns, n_bootstrap=500, seed=12)
+
+    np.testing.assert_allclose(first.adjusted_p_values, second.adjusted_p_values)
+    assert first.reject[0]
+    assert not first.reject[1]
+    assert not first.reject[2]
+    assert first.method == "ROMANO_WOLF_STATIONARY_STEPDOWN"
+
+
+def test_studentized_sharpe_interval_is_deterministic_and_supports_benchmark() -> None:
+    rng = np.random.default_rng(22)
+    benchmark = rng.normal(0.0002, 0.01, size=400)
+    strategy = 0.4 * benchmark + rng.normal(0.0006, 0.006, size=400)
+    first = studentized_sharpe_ci(
+        strategy, benchmark=benchmark, n_resamples=300, seed=7
+    )
+    second = studentized_sharpe_ci(
+        strategy, benchmark=benchmark, n_resamples=300, seed=7
+    )
+
+    assert first == second
+    assert first.lower < first.estimate < first.upper
+    assert first.benchmark_included
+    assert first.method == "LEDOIT_WOLF_STUDENTIZED_STATIONARY"

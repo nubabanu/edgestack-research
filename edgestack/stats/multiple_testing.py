@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
 
 from edgestack.stats._types import BoolArray, FloatArray, IntArray
+from edgestack.stats.bootstrap import stationary_bootstrap_indices
+from edgestack.stats.tests import hac_mean_test
 
 
 def _pvalues(p_values: FloatArray | list[float]) -> FloatArray:
@@ -71,6 +74,90 @@ def bonferroni(
     return MultipleTestingResult(adjusted, reject, alpha, "BONFERRONI", threshold)
 
 
+def romano_wolf_stepdown(
+    strategy_returns: FloatArray,
+    *,
+    alpha: float = 0.05,
+    n_bootstrap: int = 10_000,
+    average_block_length: float = 10.0,
+    seed: int = 0,
+) -> MultipleTestingResult:
+    """Apply a studentized Romano-Wolf max-t stepdown procedure.
+
+    Columns are hypotheses and rows are aligned date observations.  The same
+    stationary-bootstrap dates are used for every column, preserving the
+    dependence that makes closely related trading rules a single effective
+    search family.  Returns are recentered under the joint null and each
+    column is studentized by its HAC standard error.
+    """
+
+    values = np.asarray(strategy_returns, dtype=float)
+    if values.ndim == 1:
+        values = values[:, None]
+    if values.ndim != 2:
+        raise ValueError("strategy_returns must be (dates, hypotheses)")
+    if np.any(~np.isfinite(values)):
+        raise ValueError("Romano-Wolf inputs must be finite and aligned")
+    if values.shape[0] < 2:
+        raise ValueError("Romano-Wolf requires at least two dates")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError("alpha must lie strictly between zero and one")
+    if n_bootstrap < 1:
+        raise ValueError("n_bootstrap must be positive")
+    n_dates, n_hypotheses = values.shape
+    if n_hypotheses == 0:
+        return MultipleTestingResult(
+            np.array([], dtype=float),
+            np.array([], dtype=bool),
+            alpha,
+            "ROMANO_WOLF_STATIONARY_STEPDOWN",
+            None,
+        )
+
+    tests = [hac_mean_test(values[:, column]) for column in range(n_hypotheses)]
+    observed = np.asarray([test.t_stat for test in tests], dtype=float)
+    standard_errors = np.asarray([test.standard_error for test in tests], dtype=float)
+    means = values.mean(axis=0)
+    valid = np.isfinite(standard_errors) & (standard_errors > 0.0)
+    observed = np.where(
+        valid,
+        observed,
+        np.where(means > 0.0, math.inf, np.where(means < 0.0, -math.inf, 0.0)),
+    )
+    draws = stationary_bootstrap_indices(
+        n_dates,
+        n_bootstrap,
+        average_block_length=average_block_length,
+        seed=seed,
+    )
+    centered = values - means
+    bootstrap_means = centered[draws].mean(axis=1)
+    bootstrap_t = np.divide(
+        bootstrap_means,
+        standard_errors,
+        out=np.zeros_like(bootstrap_means),
+        where=valid,
+    )
+    order = np.argsort(-observed, kind="stable")
+    ordered_bootstrap = bootstrap_t[:, order]
+    max_remaining = np.maximum.accumulate(ordered_bootstrap[:, ::-1], axis=1)[:, ::-1]
+    raw_ordered = (
+        1.0 + np.count_nonzero(max_remaining >= observed[order][None, :], axis=0)
+    ) / (n_bootstrap + 1.0)
+    adjusted_ordered = np.maximum.accumulate(raw_ordered).clip(0.0, 1.0)
+    adjusted = np.empty(n_hypotheses, dtype=float)
+    adjusted[order] = adjusted_ordered
+    reject = adjusted <= alpha
+    critical = float(np.max(adjusted[reject])) if np.any(reject) else None
+    return MultipleTestingResult(
+        adjusted,
+        reject,
+        alpha,
+        "ROMANO_WOLF_STATIONARY_STEPDOWN",
+        critical,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class DiscoveryGauntlet:
     """Vectorized hard-gate decisions for all real and placebo trials."""
@@ -92,7 +179,7 @@ def discovery_gauntlet(
     p_values: FloatArray,
     dsr_probabilities: FloatArray,
     minimum_observations: int = 100,
-    t_threshold: float = 3.0,
+    t_threshold: float | FloatArray = 3.0,
     fdr_q: float = 0.05,
     dsr_probability: float = 0.95,
 ) -> DiscoveryGauntlet:
@@ -114,7 +201,12 @@ def discovery_gauntlet(
         raise ValueError("all gauntlet arrays must have the same one-dimensional shape")
     minimum = sizes >= minimum_observations
     positive = means > 0.0
-    t_gate = t_stats > t_threshold
+    thresholds = np.asarray(t_threshold, dtype=float)
+    if thresholds.ndim == 0:
+        thresholds = np.full(t_stats.shape, float(thresholds))
+    if thresholds.shape != t_stats.shape or np.any(~np.isfinite(thresholds)):
+        raise ValueError("t_threshold must be finite and scalar or aligned")
+    t_gate = t_stats > thresholds
     eligible_p = np.where(minimum & positive & np.isfinite(pvals), pvals, 1.0)
     fdr = benjamini_hochberg(eligible_p, q=fdr_q)
     dsr_gate = dsr > dsr_probability

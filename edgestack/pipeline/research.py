@@ -48,7 +48,11 @@ from edgestack.stats.deflated_sharpe import (
     deflated_sharpe_ratio,
     probabilistic_sharpe_ratio,
 )
-from edgestack.stats.multiple_testing import bonferroni, discovery_gauntlet
+from edgestack.stats.multiple_testing import (
+    bonferroni,
+    discovery_gauntlet,
+    romano_wolf_stepdown,
+)
 from edgestack.stats.reality_check import hansen_spa, white_reality_check
 from edgestack.stats.tests import summarize_returns
 
@@ -101,6 +105,8 @@ class DiscoveryBundle:
     survivor_fraction_t_fdr: float
     spa_p_value: float
     reality_check_p_value: float
+    romano_wolf_rejection_count: int = 0
+    romano_wolf_method: str = "NOT_REQUIRED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,11 +150,13 @@ class _CompactTrial:
 
 @dataclass(frozen=True, slots=True)
 class _FamilyPValues:
-    """Family-wide White Reality Check and Hansen SPA evidence."""
+    """Family-wide White, SPA, and optional Romano-Wolf evidence."""
 
     spa: float
     reality_check: float
     method: str = "BOUNDED_ARCH_EQUIVALENT"
+    romano_wolf_adjusted_p_values: np.ndarray[Any, np.dtype[np.float64]] | None = None
+    romano_wolf_method: str = "NOT_REQUIRED"
 
 
 def prepare_research(
@@ -215,11 +223,21 @@ def prepare_research(
     open_ = open_raw.mul(ratio)
     high = high_raw.mul(ratio)
     low = low_raw.mul(ratio)
-    invalid_ohlc = (
-        high.lt(open_.where(open_ >= close, close))
-        | low.gt(open_.where(open_ <= close, close))
-        | high.lt(low)
+    upper_body = open_.where(open_ >= close, close)
+    lower_body = open_.where(open_ <= close, close)
+    # Multiplying raw OHLC by an adjustment ratio can move mathematically
+    # equal endpoints apart by one floating-point ULP.  Reject genuine OHLC
+    # conflicts while accepting only machine-precision equality noise.
+    high_shortfall = high.lt(upper_body) & ~np.isclose(
+        high, upper_body, rtol=1e-12, atol=0.0, equal_nan=True
     )
+    low_excess = low.gt(lower_body) & ~np.isclose(
+        low, lower_body, rtol=1e-12, atol=0.0, equal_nan=True
+    )
+    inverted_range = high.lt(low) & ~np.isclose(
+        high, low, rtol=1e-12, atol=0.0, equal_nan=True
+    )
+    invalid_ohlc = high_shortfall | low_excess | inverted_range
     if bool(invalid_ohlc.to_numpy().any()):
         raise ValueError("adjusted OHLC invariants are violated")
     volume = frame.pivot(
@@ -495,6 +513,15 @@ def run_discovery(
                 for item in compact
             ]
             metrics = pd.DataFrame(rows)
+            t_thresholds = np.full(len(metrics), config.stats.hard_t, dtype=float)
+            if config.protocol.version != "FROZEN_V1":
+                calendar_trials = (
+                    metrics["family"].astype(str).eq("calendar").to_numpy(dtype=bool)
+                )
+                t_thresholds[calendar_trials] = config.protocol.time_series_t_threshold
+                t_thresholds[~calendar_trials] = (
+                    config.protocol.cross_sectional_t_threshold
+                )
             gauntlet = discovery_gauntlet(
                 sample_sizes=metrics["sample_size"].to_numpy(dtype=int),
                 directed_means=metrics["net_mean"].to_numpy(dtype=float),
@@ -507,12 +534,13 @@ def run_discovery(
                     nan=0.0,
                 ),
                 minimum_observations=config.grid.min_observations,
-                t_threshold=config.stats.hard_t,
+                t_threshold=t_thresholds,
                 fdr_q=config.stats.fdr_q,
                 dsr_probability=config.stats.dsr_probability,
             )
             metrics["minimum_sample_pass"] = gauntlet.minimum_sample
             metrics["directed_positive_pass"] = gauntlet.directed_positive
+            metrics["t_threshold"] = t_thresholds
             metrics["t_pass"] = gauntlet.t_gate
             metrics["bh_pass"] = gauntlet.fdr_gate
             metrics["bh_adjusted_p"] = gauntlet.adjusted_p_values
@@ -540,6 +568,11 @@ def run_discovery(
                     bootstrap_batch=family_bootstrap_batch,
                     callbacks=callbacks,
                     completed_trials=len(compact),
+                    romano_wolf_alpha=(
+                        config.protocol.romano_wolf_alpha
+                        if config.protocol.require_romano_wolf
+                        else None
+                    ),
                 )
             else:
                 family = _FamilyPValues(1.0, 1.0, "NO_REAL_FAMILY")
@@ -547,12 +580,27 @@ def run_discovery(
             _close_memmap(real_matrix)
 
         family_pass = family.spa < 0.05 and family.reality_check < 0.05
+        real_mask = metrics["placebo_kind"].isna().to_numpy()
+        romano_wolf_adjusted = np.ones(len(metrics), dtype=float)
+        romano_wolf_pass = np.ones(len(metrics), dtype=bool)
+        if config.protocol.require_romano_wolf:
+            real_adjusted = family.romano_wolf_adjusted_p_values
+            if real_adjusted is None or len(real_adjusted) != int(real_mask.sum()):
+                raise RuntimeError("Romano-Wolf evidence is missing or misaligned")
+            romano_wolf_adjusted[real_mask] = real_adjusted
+            romano_wolf_pass[real_mask] = (
+                real_adjusted <= config.protocol.romano_wolf_alpha
+            )
         metrics["family_test_scope"] = "ALL_PREREGISTERED_REAL"
         metrics["family_test_real_count"] = total_real
         metrics["family_test_method"] = family.method
         metrics["spa_pass"] = gauntlet.survivors & family_pass
         metrics["reality_check_pass"] = gauntlet.survivors & family_pass
-        metrics["discovery_survivor"] = metrics["spa_pass"]
+        metrics["romano_wolf_scope"] = "ALL_PREREGISTERED_REAL"
+        metrics["romano_wolf_method"] = family.romano_wolf_method
+        metrics["romano_wolf_adjusted_p"] = romano_wolf_adjusted
+        metrics["romano_wolf_pass"] = romano_wolf_pass
+        metrics["discovery_survivor"] = metrics["spa_pass"] & romano_wolf_pass
 
         # Ineligible declarations retain an explicit HAC normal interval.
         # Eligible and finalist intervals are then overwritten using shared,
@@ -588,7 +636,6 @@ def run_discovery(
             callbacks=callbacks,
         )
 
-        real_mask = metrics["placebo_kind"].isna().to_numpy()
         t_fdr = (
             gauntlet.minimum_sample
             & gauntlet.directed_positive
@@ -644,6 +691,12 @@ def run_discovery(
             survivor_fraction,
             family.spa,
             family.reality_check,
+            (
+                int(np.count_nonzero(romano_wolf_pass & real_mask))
+                if config.protocol.require_romano_wolf
+                else 0
+            ),
+            family.romano_wolf_method,
         )
 
 
@@ -781,6 +834,7 @@ def _bounded_family_p_values(
     bootstrap_batch: int,
     callbacks: tuple[ProgressCallback, ...],
     completed_trials: int,
+    romano_wolf_alpha: float | None = None,
 ) -> _FamilyPValues:
     """Run family-wide tests without a strategies-by-reps resident tensor.
 
@@ -798,6 +852,16 @@ def _bounded_family_p_values(
         values = np.asarray(matrix, dtype=float)
         spa = hansen_spa(values, n_bootstrap=n_bootstrap, seed=seed)
         reality = white_reality_check(values, n_bootstrap=n_bootstrap, seed=seed)
+        romano_wolf = (
+            romano_wolf_stepdown(
+                values,
+                alpha=romano_wolf_alpha,
+                n_bootstrap=n_bootstrap,
+                seed=seed,
+            )
+            if romano_wolf_alpha is not None
+            else None
+        )
         _emit_progress(
             callbacks,
             DiscoveryProgress("family_models", n_models, n_models, completed_trials),
@@ -806,6 +870,8 @@ def _bounded_family_p_values(
             spa.p_value,
             reality.p_value,
             "ARCH_REFERENCE",
+            (romano_wolf.adjusted_p_values if romano_wolf is not None else None),
+            romano_wolf.method if romano_wolf is not None else "NOT_REQUIRED",
         )
 
     means, variances = _family_moments(matrix, strategy_batch=strategy_batch)
@@ -819,36 +885,95 @@ def _bounded_family_p_values(
     observed = float(means.max())
     spa_max = np.full(n_bootstrap, -math.inf, dtype=float)
     reality_max = np.full(n_bootstrap, -math.inf, dtype=float)
-    with _stationary_count_matrix(
-        workdir,
-        n_observations=n_dates,
-        n_resamples=n_bootstrap,
-        seed=seed,
-        callbacks=callbacks,
-        completed_trials=completed_trials,
-    ) as counts:
-        for start in range(0, n_models, strategy_batch):
-            stop = min(start + strategy_batch, n_models)
-            values = np.asarray(matrix[:, start:stop], dtype=float)
+    romano_wolf_path = workdir / "romano-wolf-studentized.dat"
+    romano_wolf_statistics: np.memmap[Any, np.dtype[np.float64]] | None = None
+    standard_errors = np.sqrt(np.maximum(variances, 0.0) / n_dates)
+    valid_standard_errors = np.isfinite(standard_errors) & (standard_errors > 0.0)
+    if romano_wolf_alpha is not None:
+        romano_wolf_statistics = np.memmap(
+            romano_wolf_path,
+            mode="w+",
+            dtype=np.float64,
+            shape=(n_bootstrap, n_models),
+        )
+    try:
+        with _stationary_count_matrix(
+            workdir,
+            n_observations=n_dates,
+            n_resamples=n_bootstrap,
+            seed=seed,
+            callbacks=callbacks,
+            completed_trials=completed_trials,
+        ) as counts:
+            for start in range(0, n_models, strategy_batch):
+                stop = min(start + strategy_batch, n_models)
+                values = np.asarray(matrix[:, start:stop], dtype=float)
+                for draw_start in range(0, n_bootstrap, bootstrap_batch):
+                    draw_stop = min(draw_start + bootstrap_batch, n_bootstrap)
+                    weights = np.asarray(counts[draw_start:draw_stop], dtype=float)
+                    sampled = weights @ values / n_dates
+                    spa_max[draw_start:draw_stop] = np.maximum(
+                        spa_max[draw_start:draw_stop],
+                        np.max(sampled - spa_centers[start:stop], axis=1),
+                    )
+                    reality_max[draw_start:draw_stop] = np.maximum(
+                        reality_max[draw_start:draw_stop],
+                        np.max(sampled - means[start:stop], axis=1),
+                    )
+                    if romano_wolf_statistics is not None:
+                        romano_wolf_statistics[draw_start:draw_stop, start:stop] = (
+                            np.divide(
+                                sampled - means[start:stop],
+                                standard_errors[start:stop],
+                                out=np.zeros_like(sampled),
+                                where=valid_standard_errors[start:stop],
+                            )
+                        )
+                _emit_progress(
+                    callbacks,
+                    DiscoveryProgress(
+                        "family_models", stop, n_models, completed_trials
+                    ),
+                )
+        romano_wolf_adjusted: np.ndarray[Any, np.dtype[np.float64]] | None = None
+        if romano_wolf_statistics is not None:
+            romano_wolf_statistics.flush()
+            observed_t = np.divide(
+                means,
+                standard_errors,
+                out=np.where(
+                    means > 0.0, math.inf, np.where(means < 0.0, -math.inf, 0.0)
+                ),
+                where=valid_standard_errors,
+            )
+            order = np.argsort(-observed_t, kind="stable")
+            exceedances = np.zeros(n_models, dtype=np.int64)
             for draw_start in range(0, n_bootstrap, bootstrap_batch):
                 draw_stop = min(draw_start + bootstrap_batch, n_bootstrap)
-                weights = np.asarray(counts[draw_start:draw_stop], dtype=float)
-                sampled = weights @ values / n_dates
-                spa_max[draw_start:draw_stop] = np.maximum(
-                    spa_max[draw_start:draw_stop],
-                    np.max(sampled - spa_centers[start:stop], axis=1),
+                ordered = np.asarray(
+                    romano_wolf_statistics[draw_start:draw_stop, :], dtype=float
+                )[:, order]
+                maxima = np.maximum.accumulate(ordered[:, ::-1], axis=1)[:, ::-1]
+                exceedances += np.count_nonzero(
+                    maxima >= observed_t[order][None, :], axis=0
                 )
-                reality_max[draw_start:draw_stop] = np.maximum(
-                    reality_max[draw_start:draw_stop],
-                    np.max(sampled - means[start:stop], axis=1),
-                )
-            _emit_progress(
-                callbacks,
-                DiscoveryProgress("family_models", stop, n_models, completed_trials),
-            )
+            ordered_p = (1.0 + exceedances) / (n_bootstrap + 1.0)
+            ordered_adjusted = np.maximum.accumulate(ordered_p).clip(0.0, 1.0)
+            romano_wolf_adjusted = np.empty(n_models, dtype=float)
+            romano_wolf_adjusted[order] = ordered_adjusted
+    finally:
+        _close_memmap(romano_wolf_statistics)
+        romano_wolf_path.unlink(missing_ok=True)
     return _FamilyPValues(
         float(np.mean(spa_max > observed)),
         float(np.mean(reality_max > observed)),
+        "BOUNDED_ARCH_EQUIVALENT",
+        romano_wolf_adjusted,
+        (
+            "BOUNDED_STUDENTIZED_STATIONARY_MAX_T"
+            if romano_wolf_alpha is not None
+            else "NOT_REQUIRED"
+        ),
     )
 
 

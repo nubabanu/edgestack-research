@@ -113,6 +113,19 @@ def test_cost_breakdown_matches_frozen_formula() -> None:
     np.testing.assert_allclose(result.total_bps, 6.0)
 
 
+def test_capacity_curve_raises_impact_without_changing_gross_alpha() -> None:
+    gross = np.array([0.0, 0.01, 0.01])
+    positions = np.array([0.0, 1.0, 0.0])
+    curve = CostModel().capacity_curve(
+        gross,
+        positions,
+        capital_multipliers=(1.0, 100.0),
+        adv_dollars=1_000_000.0,
+    )
+
+    assert np.nanmean(curve[1.0]) > np.nanmean(curve[100.0])
+
+
 def test_metrics_capture_drawdown_and_benchmark_relative_fields() -> None:
     values = np.array([0.10, -0.20, 0.05, 0.03])
     benchmark = np.array([0.02, -0.01, 0.01, 0.01])

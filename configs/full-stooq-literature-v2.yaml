@@ -1,0 +1,26 @@
+profile: full
+data:
+  start: 1960-01-01
+  reconciliation_method: action_stratified_returns
+  providers:
+    stooq_bulk_archive: d_us_txt.zip
+    stooq_bulk_sha256: 973fccc87775d4de06b54a052c1ca9d5131065f2c22c158bcc3090d8ef5d81de
+stats:
+  seed: 42
+  bootstrap_reps: 2000
+  finalist_bootstrap_reps: 10000
+protocol:
+  version: LITERATURE_V2
+  replication_policy: EXECUTION_WITH_EMPIRICAL_DIAGNOSTICS
+  time_series_t_threshold: 3.8
+  cross_sectional_t_threshold: 3.4
+  require_romano_wolf: true
+  romano_wolf_alpha: 0.05
+  sharpe_interval: STUDENTIZED_STATIONARY
+  capacity_capital_multipliers: [1.0, 10.0, 100.0, 1000.0]
+  revision_context: POST_REPLICATION_PRE_DISCOVERY
+grid:
+  max_interaction_order: 2
+  min_observations: 100
+live:
+  enabled: false

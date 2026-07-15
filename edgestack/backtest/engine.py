@@ -144,7 +144,7 @@ def vectorized_backtest(
     execution_lag: int = 1,
     cost_model: CostModel | None = None,
     asset_type: str | Sequence[str] = "equity",
-    order_dollars: float = 10_000.0,
+    order_dollars: float | None = None,
     adv_dollars: float | FloatArray = 100_000_000.0,
     cost_multiplier: float = 1.0,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:

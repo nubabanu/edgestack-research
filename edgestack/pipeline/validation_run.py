@@ -29,7 +29,7 @@ from edgestack.models import (
     VerdictRecord,
 )
 from edgestack.pipeline.research import PreparedResearch, run_trial
-from edgestack.stats.bootstrap import stationary_bootstrap_ci
+from edgestack.stats.bootstrap import stationary_bootstrap_ci, studentized_sharpe_ci
 from edgestack.stats.multiple_testing import benjamini_hochberg
 from edgestack.validation.cpcv import PBOResult, cpcv_pbo
 from edgestack.validation.decay import DecayResult, analyze_decay, classify_decay
@@ -157,7 +157,13 @@ def run_validation(
         ("confirmation_timestamps_match", False),
         ("confirmation_reason", "not run"),
         ("cost_sensitivity", "{}"),
+        ("capacity_curve", "{}"),
         ("break_even_cost_multiplier", np.nan),
+        ("sharpe_interval_method", "PERCENTILE_STATIONARY"),
+        ("sharpe_difference", np.nan),
+        ("sharpe_difference_ci_lower", np.nan),
+        ("sharpe_difference_ci_upper", np.nan),
+        ("sharpe_difference_p_value", np.nan),
     ):
         rows[column] = default
 
@@ -211,6 +217,19 @@ def run_validation(
             f"{scale:g}x": float(np.nanmean(values))
             for scale, values in sensitivity.items()
         }
+        capacity = cost_model.capacity_curve(
+            trial.result.gross_returns,
+            trial.result.positions,
+            capital_multipliers=config.protocol.capacity_capital_multipliers,
+            asset_type=asset_type,
+            adv_dollars=adv_dollars,
+        )
+        capacity_means = {
+            f"{scale:g}x_${config.costs.capital * scale:,.0f}": float(
+                np.nanmean(values)
+            )
+            for scale, values in capacity.items()
+        }
         baseline_cost = float(
             np.nanmean(trial.result.gross_returns - trial.result.net_returns)
         )
@@ -248,6 +267,7 @@ def run_validation(
         rows.loc[row, "confirmation_timestamps_match"] = confirmation.timestamps_match
         rows.loc[row, "confirmation_reason"] = confirmation.reason
         rows.loc[row, "cost_sensitivity"] = str(sensitivity_means)
+        rows.loc[row, "capacity_curve"] = str(capacity_means)
         rows.loc[row, "break_even_cost_multiplier"] = break_even_cost_multiplier(
             float(np.nanmean(trial.result.gross_returns)), baseline_cost
         )
@@ -258,19 +278,52 @@ def run_validation(
             n_resamples=config.stats.finalist_bootstrap_reps,
             seed=config.stats.seed,
         )
-        sharpe_ci = stationary_bootstrap_ci(
-            stream,
-            statistic="sharpe",
-            n_resamples=config.stats.finalist_bootstrap_reps,
-            seed=config.stats.seed,
-        )
+        if config.protocol.sharpe_interval == "STUDENTIZED_STATIONARY":
+            studentized_interval = studentized_sharpe_ci(
+                stream,
+                n_resamples=config.stats.finalist_bootstrap_reps,
+                holding_period=holding,
+                seed=config.stats.seed,
+            )
+            sharpe_bounds = (
+                studentized_interval.lower,
+                studentized_interval.upper,
+            )
+            rows.loc[row, "sharpe_interval_method"] = studentized_interval.method
+            if trial.benchmark_returns is not None:
+                sharpe_difference = studentized_sharpe_ci(
+                    stream,
+                    benchmark=trial.benchmark_returns,
+                    n_resamples=config.stats.finalist_bootstrap_reps,
+                    holding_period=holding,
+                    seed=config.stats.seed,
+                )
+                rows.loc[row, "sharpe_difference"] = sharpe_difference.estimate
+                rows.loc[
+                    row,
+                    [
+                        "sharpe_difference_ci_lower",
+                        "sharpe_difference_ci_upper",
+                    ],
+                ] = [sharpe_difference.lower, sharpe_difference.upper]
+                rows.loc[row, "sharpe_difference_p_value"] = (
+                    sharpe_difference.p_value_two_sided
+                )
+        else:
+            percentile_interval = stationary_bootstrap_ci(
+                stream,
+                statistic="sharpe",
+                n_resamples=config.stats.finalist_bootstrap_reps,
+                seed=config.stats.seed,
+            )
+            sharpe_bounds = (percentile_interval.lower, percentile_interval.upper)
         rows.loc[row, ["mean_ci_lower", "mean_ci_upper"]] = [
             mean_ci.lower,
             mean_ci.upper,
         ]
         rows.loc[row, ["sharpe_ci_lower", "sharpe_ci_upper"]] = [
-            sharpe_ci.lower,
-            sharpe_ci.upper,
+            sharpe_bounds[0],
+            sharpe_bounds[1],
         ]
 
     # The interaction family is adjusted once across every eligible validation
@@ -421,7 +474,22 @@ def _evidence_from_row(row: dict[str, Any], pbo: PBOResult) -> EvidenceBundle:
         "bh_adjusted_p": row.get("bh_adjusted_p"),
         "hac_lags": row.get("hac_lags"),
         "cost_sensitivity": row.get("cost_sensitivity", "{}"),
+        "capacity_curve": row.get("capacity_curve", "{}"),
         "break_even_cost_multiplier": row.get("break_even_cost_multiplier"),
+        "romano_wolf_adjusted_p": row.get("romano_wolf_adjusted_p"),
+        "romano_wolf_pass": bool(row.get("romano_wolf_pass", False)),
+        "romano_wolf_method": row.get("romano_wolf_method", "NOT_REQUIRED"),
+        "sharpe_interval_method": row.get(
+            "sharpe_interval_method", "PERCENTILE_STATIONARY"
+        ),
+        "sharpe_difference": _optional_float(row.get("sharpe_difference")),
+        "sharpe_difference_ci": (
+            _optional_float(row.get("sharpe_difference_ci_lower")),
+            _optional_float(row.get("sharpe_difference_ci_upper")),
+        ),
+        "sharpe_difference_p_value": _optional_float(
+            row.get("sharpe_difference_p_value")
+        ),
         "confirmation_backend": row.get("confirmation_backend", "not_run"),
         "confirmation_executed": bool(row.get("confirmation_executed", False)),
         "confirmation_pass": bool(row.get("confirmation_pass", False)),

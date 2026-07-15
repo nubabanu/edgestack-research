@@ -137,6 +137,35 @@ def test_campaign_preparation_rejects_a_bar_unavailable_at_next_fill() -> None:
         )
 
 
+def test_adjustment_ratio_accepts_only_machine_precision_ohlc_equality() -> None:
+    sessions = pd.bdate_range("2024-01-02", periods=3)
+    close = np.array([100.0, 101.0, 102.0])
+    bars = pd.DataFrame(
+        {
+            "symbol": "SPY",
+            "session": sessions,
+            "event_time": sessions.tz_localize(UTC) + pd.Timedelta(hours=21),
+            "available_at": sessions.tz_localize(UTC) + pd.Timedelta(hours=22),
+            "open": close,
+            "high": close,
+            "low": np.nextafter(close, np.inf),
+            "close": close,
+            "adjusted_close": close / 3.0,
+            "volume": 1_000_000.0,
+        }
+    )
+
+    prepared = prepare_research(
+        bars,
+        start=sessions.min(),
+        end=sessions.max(),
+        fomc_dates=pd.DatetimeIndex([]),
+        sector_by_symbol={"SPY": "ETF"},
+    )
+
+    assert len(prepared.dates) == 3
+
+
 def test_reversal_positions_average_five_overlapping_cohorts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
