@@ -617,6 +617,7 @@ class YahooDailyBarSource(_HttpSource):
             int(key): value for key, value in (events.get("splits") or {}).items()
         }
         bars: list[Bar] = []
+        malformed_ohlc_sessions: list[str] = []
         for index, timestamp_value in enumerate(timestamps):
             close = _at(quote_data.get("close"), index)
             if close is None:
@@ -625,10 +626,11 @@ class YahooDailyBarSource(_HttpSource):
             split = splits.get(timestamp, {})
             numerator = _number(split.get("numerator"), default=1.0)
             denominator = _number(split.get("denominator"), default=1.0)
-            bars.append(
-                _bar(
+            session = _datetime_from_unix(timestamp).date()
+            try:
+                bar = _bar(
                     request,
-                    session=_datetime_from_unix(timestamp).date(),
+                    session=session,
                     source=self.name,
                     open_=_at(quote_data.get("open"), index),
                     high=_at(quote_data.get("high"), index),
@@ -641,10 +643,23 @@ class YahooDailyBarSource(_HttpSource):
                     ),
                     split_factor=(numerator / denominator if denominator else 1.0),
                 )
-            )
+            except ValueError as error:
+                if str(error) != "OHLC range invariant violated":
+                    raise
+                malformed_ohlc_sessions.append(session.isoformat())
+                continue
+            bars.append(bar)
         if not bars:
             raise NoDataError(
                 f"Yahoo returned only null bars for {request.asset.symbol}"
+            )
+        warnings = [self._warning]
+        if malformed_ohlc_sessions:
+            examples = ",".join(malformed_ohlc_sessions[:10])
+            warnings.append(
+                "YAHOO_MALFORMED_OHLC_DROPPED: "
+                f"{len(malformed_ohlc_sessions)} provider row(s) failed the OHLC "
+                f"range invariant; sessions={examples}; raw payload retained."
             )
         return SourceBatch(
             self.name,
@@ -652,7 +667,7 @@ class YahooDailyBarSource(_HttpSource):
             tuple(bars),
             fetched_at,
             digest,
-            (self._warning,),
+            tuple(warnings),
         )
 
 

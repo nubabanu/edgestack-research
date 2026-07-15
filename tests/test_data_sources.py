@@ -125,6 +125,49 @@ def test_yahoo_parses_pre_1970_unix_dates_on_windows() -> None:
     assert batch.bars[0].adjusted_close == 1.25
 
 
+def test_yahoo_drops_malformed_ohlc_row_with_audit_warning() -> None:
+    first = int(datetime(2024, 1, 2, tzinfo=UTC).timestamp())
+    second = int(datetime(2024, 1, 3, tzinfo=UTC).timestamp())
+    payload = {
+        "chart": {
+            "error": None,
+            "result": [
+                {
+                    "timestamp": [first, second],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [10.0, 10.0],
+                                "high": [11.0, 11.0],
+                                "low": [10.5, 9.0],
+                                "close": [10.75, 10.5],
+                                "volume": [1000, 1200],
+                            }
+                        ],
+                        "adjclose": [{"adjclose": [10.75, 10.5]}],
+                    },
+                }
+            ],
+        }
+    }
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=json.dumps(payload).encode())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    source = YahooDailyBarSource(client=client, minimum_interval=0)
+    request = BarRequest(AssetKey("BAD"), date(2024, 1, 1), date(2024, 1, 4))
+    batch = asyncio.run(source.fetch_bars(request))
+    asyncio.run(client.aclose())
+
+    assert [bar.event_time.date() for bar in batch.bars] == [date(2024, 1, 3)]
+    assert any(
+        warning.startswith("YAHOO_MALFORMED_OHLC_DROPPED: 1")
+        and "sessions=2024-01-02" in warning
+        for warning in batch.warnings
+    )
+
+
 def test_fallback_never_splices_failed_provider() -> None:
     request = BarRequest(AssetKey("TEST"), date(2024, 1, 1), date(2024, 1, 3))
 
