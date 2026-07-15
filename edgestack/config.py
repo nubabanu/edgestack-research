@@ -35,9 +35,35 @@ class ProviderConfig(StrictModel):
     tiingo_api_key_env: str = "TIINGO_API_KEY"
     finnhub_api_key_env: str = "FINNHUB_API_KEY"
     alpha_vantage_api_key_env: str = "ALPHAVANTAGE_API_KEY"
+    stooq_bulk_archive: Path | None = None
+    stooq_bulk_sha256: str | None = None
     timeout_seconds: float = 30.0
     max_attempts: int = 6
     concurrency: int = 4
+
+    @field_validator("stooq_bulk_sha256")
+    @classmethod
+    def validate_stooq_bulk_sha256(cls, value: str | None) -> str | None:
+        """Normalize and validate an optional pinned Stooq archive digest."""
+
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if len(normalized) != 64 or any(
+            character not in "0123456789abcdef" for character in normalized
+        ):
+            raise ValueError("stooq_bulk_sha256 must be a hexadecimal SHA-256 digest")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_stooq_bulk_pair(self) -> ProviderConfig:
+        """Require archive paths and their immutable hashes together."""
+
+        if (self.stooq_bulk_archive is None) != (self.stooq_bulk_sha256 is None):
+            raise ValueError(
+                "stooq_bulk_archive and stooq_bulk_sha256 must be configured together"
+            )
+        return self
 
 
 class DataConfig(StrictModel):

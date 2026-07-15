@@ -45,6 +45,7 @@ from edgestack.data.sources import (
     DailyBarSource,
     FallbackDailyBarSource,
     SourceBatch,
+    StooqBulkArchiveDailyBarSource,
     StooqDailyBarSource,
     TiingoDailyBarSource,
     YahooDailyBarSource,
@@ -459,6 +460,24 @@ async def _acquire_full(
         item.asset.symbol: item.raw_sha256 for item in snapshots
     }
     source_hashes["canonical_research_bars"] = _frame_content_sha256(bars)
+    bulk_stooq = next(
+        (
+            source
+            for source in sources
+            if isinstance(source, StooqBulkArchiveDailyBarSource)
+        ),
+        None,
+    )
+    if bulk_stooq is not None:
+        source_hashes["stooq_bulk_archive"] = bulk_stooq.archive_sha256
+        reference_warnings.extend(
+            (
+                "STOOQ_BULK_ARCHIVE: reconciliation uses exact members from "
+                f"archive SHA-256 {bulk_stooq.archive_sha256}.",
+                "USER_SUPPLIED_SOURCE_ARCHIVE: archive origin is operator-attested; "
+                "Stooq does not provide a cryptographic publisher signature.",
+            )
+        )
     factors = pd.DataFrame()
     fomc_dates = pd.DatetimeIndex([])
     try:
@@ -640,15 +659,29 @@ def _canonical_adjusted_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _stooq_source(config: EdgeStackConfig, cache: DataCache) -> DailyBarSource:
+    archive = config.data.providers.stooq_bulk_archive
+    if archive is not None:
+        expected_sha256 = config.data.providers.stooq_bulk_sha256
+        if expected_sha256 is None:  # protected by typed-config validation
+            raise ValueError("Stooq bulk archive requires its pinned SHA-256")
+        return StooqBulkArchiveDailyBarSource(
+            archive,
+            expected_sha256=expected_sha256,
+            raw_sink=cache.raw,
+        )
+    return StooqDailyBarSource(
+        raw_sink=cache.raw,
+        timeout=config.data.providers.timeout_seconds,
+        max_attempts=config.data.providers.max_attempts,
+    )
+
+
 def _provider_chain(
     config: EdgeStackConfig, cache: DataCache
 ) -> tuple[DailyBarSource, ...]:
     providers: dict[str, DailyBarSource] = {
-        "stooq": StooqDailyBarSource(
-            raw_sink=cache.raw,
-            timeout=config.data.providers.timeout_seconds,
-            max_attempts=config.data.providers.max_attempts,
-        ),
+        "stooq": _stooq_source(config, cache),
         "yfinance": YahooDailyBarSource(
             raw_sink=cache.raw,
             timeout=config.data.providers.timeout_seconds,
@@ -710,11 +743,7 @@ async def _reconcile_fixed_symbols(
     tuple[_CommonProviderEvidence, ...],
     dict[str, str],
 ]:
-    stooq = StooqDailyBarSource(
-        raw_sink=cache.raw,
-        timeout=config.data.providers.timeout_seconds,
-        max_attempts=config.data.providers.max_attempts,
-    )
+    stooq = _stooq_source(config, cache)
     yahoo = YahooDailyBarSource(
         raw_sink=cache.raw,
         timeout=config.data.providers.timeout_seconds,

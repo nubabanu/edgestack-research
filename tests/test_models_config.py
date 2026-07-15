@@ -63,3 +63,23 @@ def test_yaml_config_and_cross_validation() -> None:
     assert load_config("configs/smoke.yaml").profile == "smoke"
     with pytest.raises(ValueError, match="embargo"):
         EdgeStackConfig.model_validate({"validation": {"embargo_sessions": 5}})
+
+
+def test_stooq_bulk_config_requires_a_hash_pinned_pair() -> None:
+    config = EdgeStackConfig.model_validate(
+        {
+            "data": {
+                "providers": {
+                    "stooq_bulk_archive": "d_us_txt.zip",
+                    "stooq_bulk_sha256": "A" * 64,
+                }
+            }
+        }
+    )
+    assert config.data.providers.stooq_bulk_archive is not None
+    assert config.data.providers.stooq_bulk_sha256 == "a" * 64
+
+    with pytest.raises(ValueError, match="must be configured together"):
+        EdgeStackConfig.model_validate(
+            {"data": {"providers": {"stooq_bulk_archive": "d_us_txt.zip"}}}
+        )

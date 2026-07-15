@@ -17,4 +17,4 @@ artifacts/
 *.sqlite-shm
 *.sqlite-wal
 .env
-
+/d_us_txt.zip

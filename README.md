@@ -51,6 +51,19 @@ The no-key profile tries Stooq first and uses Yahoo only as a whole-series
 fallback. Set `TIINGO_API_KEY`, `FINNHUB_API_KEY`, or other supported secrets in
 the environment; never put tokens in YAML.
 
+When Stooq's interactive CSV endpoint requires browser verification, an official
+bulk ASCII archive can be used without weakening the reconciliation gate. Put the
+archive outside Git, configure both `data.providers.stooq_bulk_archive` and its
+SHA-256, and use that same config for every phase. The adapter reads only the
+requested ZIP member, persists those exact member bytes in the raw content store,
+and rejects a changed archive. `configs/full-stooq-bulk.yaml` pins the handoff
+archive `d_us_txt.zip`; its operator-attested origin remains visibly warned because
+Stooq does not publish a cryptographic signature.
+
+```powershell
+edgestack ingest --config configs/full-stooq-bulk.yaml --campaign-id <id> --as-of YYYY-MM-DD
+```
+
 The gated campaign flow is:
 
 ```text

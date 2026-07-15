@@ -22,10 +22,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
-from io import StringIO
+from io import BytesIO, StringIO
+from pathlib import Path, PurePosixPath
 from types import TracebackType
 from typing import Any, Final, Protocol, Self
 from urllib.parse import urlencode
+from zipfile import BadZipFile, ZipFile
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -554,6 +556,178 @@ class StooqDailyBarSource(_HttpSource):
         )
 
 
+class StooqBulkArchiveDailyBarSource:
+    """Read exact daily Stooq ASCII members from a hash-pinned bulk archive.
+
+    The official bulk archive is useful when Stooq's interactive endpoint serves
+    browser verification instead of CSV.  Only the requested member bytes are
+    copied into the immutable raw store; the large archive remains read-only and
+    is checked against its preregistered SHA-256 before it can be used.
+    """
+
+    name = "stooq"
+    capabilities = StooqDailyBarSource.capabilities
+    _warning = StooqDailyBarSource._warning
+
+    def __init__(
+        self,
+        archive_path: str | Path,
+        *,
+        expected_sha256: str,
+        raw_sink: RawPayloadSink | None = None,
+        now: Callable[[], datetime] = _utc_now,
+    ) -> None:
+        self.archive_path = Path(archive_path).resolve()
+        if not self.archive_path.is_file():
+            raise SourceError(f"Stooq bulk archive is missing: {self.archive_path}")
+        normalized_hash = expected_sha256.strip().lower()
+        if len(normalized_hash) != 64 or any(
+            character not in "0123456789abcdef" for character in normalized_hash
+        ):
+            raise ValueError("expected_sha256 must be a hexadecimal SHA-256 digest")
+        archive_digest = hashlib.sha256()
+        with self.archive_path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                archive_digest.update(chunk)
+        self.archive_sha256 = archive_digest.hexdigest()
+        if self.archive_sha256 != normalized_hash:
+            raise SourceError(
+                "Stooq bulk archive SHA-256 mismatch: "
+                f"expected {normalized_hash}, observed {self.archive_sha256}"
+            )
+        stat = self.archive_path.stat()
+        self._archive_signature = (stat.st_size, stat.st_mtime_ns)
+        self._archive_mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+        self._raw_sink = raw_sink or MemoryRawPayloadSink()
+        self._now = now
+        members: dict[str, list[tuple[str, int]]] = {}
+        try:
+            with ZipFile(self.archive_path) as archive:
+                for info in archive.infolist():
+                    if info.is_dir():
+                        continue
+                    leaf = PurePosixPath(info.filename).name.lower()
+                    if leaf.endswith(".us.txt"):
+                        members.setdefault(leaf, []).append((info.filename, info.CRC))
+        except (BadZipFile, OSError) as error:
+            raise SourceError(
+                f"invalid Stooq bulk archive: {self.archive_path}"
+            ) from error
+        self._members = {key: tuple(value) for key, value in members.items()}
+
+    def _assert_archive_unchanged(self) -> None:
+        stat = self.archive_path.stat()
+        if (stat.st_size, stat.st_mtime_ns) != self._archive_signature:
+            raise SourceError("Stooq bulk archive changed after SHA-256 verification")
+
+    async def fetch_bars(self, request: BarRequest) -> SourceBatch:
+        """Return one complete, date-filtered archive member as canonical bars."""
+
+        self._assert_archive_unchanged()
+        member_key = f"{_vendor_symbol(request.asset.symbol, self.name)}.txt"
+        candidates = self._members.get(member_key, ())
+        if not candidates:
+            raise NoDataError(
+                f"Stooq bulk archive has no member for {request.asset.symbol}"
+            )
+        if len(candidates) != 1:
+            raise PartialSeriesError(
+                f"Stooq bulk archive has duplicate members for {request.asset.symbol}"
+            )
+        member, member_crc = candidates[0]
+        try:
+            with ZipFile(self.archive_path) as archive:
+                body = archive.read(member)
+        except (BadZipFile, KeyError, OSError) as error:
+            raise SourceError(f"cannot read Stooq bulk member {member}") from error
+        fetched_at = self._now()
+        digest = self._raw_sink.store(
+            RawPayload(
+                source=self.name,
+                asset=request.asset,
+                fetched_at=fetched_at,
+                media_type="text/csv",
+                body=body,
+                request_url=f"stooq-bulk://{self.archive_path.name}/{member}",
+                response_headers={
+                    "archive-sha256": self.archive_sha256,
+                    "archive-size": str(self._archive_signature[0]),
+                    "archive-mtime-utc": self._archive_mtime.isoformat(),
+                    "member-crc32": f"{member_crc:08x}",
+                },
+            )
+        )
+        try:
+            table = pd.read_csv(BytesIO(body))
+        except (pd.errors.ParserError, UnicodeDecodeError) as error:
+            raise SourceError(
+                f"Stooq bulk member is not valid CSV for {request.asset.symbol}"
+            ) from error
+        table.columns = [
+            str(column).strip().removeprefix("<").removesuffix(">").lower()
+            for column in table.columns
+        ]
+        required = {"ticker", "per", "date", "open", "high", "low", "close", "vol"}
+        if table.empty or not required.issubset(table.columns):
+            raise NoDataError(
+                f"Stooq bulk member has no usable bars for {request.asset.symbol}"
+            )
+        expected_ticker = _vendor_symbol(request.asset.symbol, self.name).upper()
+        observed_tickers = {
+            str(value).strip().upper() for value in table["ticker"].dropna().unique()
+        }
+        if observed_tickers != {expected_ticker}:
+            raise PartialSeriesError(
+                f"Stooq bulk member ticker mismatch for {request.asset.symbol}: "
+                f"{sorted(observed_tickers)}"
+            )
+        periods = {
+            str(value).strip().upper() for value in table["per"].dropna().unique()
+        }
+        if periods != {"D"}:
+            raise PartialSeriesError(
+                f"Stooq bulk member is not daily for {request.asset.symbol}: "
+                f"{sorted(periods)}"
+            )
+        table["session"] = pd.to_datetime(
+            table["date"].astype(str), format="%Y%m%d", errors="raise"
+        )
+        table = table.loc[
+            table["session"].dt.date.between(request.start, request.end)
+        ].sort_values("session", kind="stable")
+        if table.empty:
+            raise NoDataError(
+                f"Stooq bulk archive has no bars in range for {request.asset.symbol}"
+            )
+        if table["session"].duplicated().any():
+            raise PartialSeriesError(
+                f"Stooq bulk member has duplicate sessions for {request.asset.symbol}"
+            )
+        bars = tuple(
+            _bar(
+                request,
+                session=row.session,
+                source=self.name,
+                open_=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.vol,
+                adjusted_close=row.close,
+            )
+            for row in table.itertuples(index=False)
+        )
+        warnings = (
+            self._warning,
+            "STOOQ_BULK_ARCHIVE: exact member bytes were imported from the "
+            f"hash-pinned archive {self.archive_sha256}; member={member}; "
+            f"archive_mtime_utc={self._archive_mtime.isoformat()}.",
+            "USER_SUPPLIED_SOURCE_ARCHIVE: archive origin is operator-attested; "
+            "Stooq does not provide a cryptographic publisher signature.",
+        )
+        return SourceBatch(self.name, request, bars, fetched_at, digest, warnings)
+
+
 class YahooDailyBarSource(_HttpSource):
     """Unofficial Yahoo chart adapter used as a whole-series fallback."""
 
@@ -916,6 +1090,7 @@ __all__ = [
     "SourceBatch",
     "SourceCapabilities",
     "SourceError",
+    "StooqBulkArchiveDailyBarSource",
     "StooqDailyBarSource",
     "TiingoDailyBarSource",
     "TiingoQuoteSource",

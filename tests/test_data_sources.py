@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from datetime import UTC, date, datetime
+from pathlib import Path
+from zipfile import ZipFile
 
 import httpx
 import pytest
@@ -11,6 +14,8 @@ from edgestack.data.sources import (
     FallbackDailyBarSource,
     MemoryRawPayloadSink,
     NoDataError,
+    SourceError,
+    StooqBulkArchiveDailyBarSource,
     StooqDailyBarSource,
     YahooDailyBarSource,
 )
@@ -37,6 +42,50 @@ def test_stooq_adapter_preserves_raw_and_canonicalizes() -> None:
     assert batch.bars[0].adjusted_close == 11
     assert batch.bars[0].available_at > batch.bars[0].event_time
     assert "raw and adjusted" in batch.warnings[0]
+
+
+def test_stooq_bulk_archive_is_hash_pinned_filtered_and_preserved(
+    tmp_path: Path,
+) -> None:
+    member = "data/daily/us/nasdaq stocks/1/test.us.txt"
+    body = (
+        b"<TICKER>,<PER>,<DATE>,<TIME>,<OPEN>,<HIGH>,<LOW>,<CLOSE>,<VOL>,<OPENINT>\n"
+        b"TEST.US,D,20231229,000000,9,10,8,9.5,900,0\n"
+        b"TEST.US,D,20240102,000000,10,12,9,11,1000,0\n"
+        b"TEST.US,D,20240103,000000,11,13,10,12,1100,0\n"
+    )
+    archive_path = tmp_path / "d_us_txt.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr(member, body)
+    archive_sha256 = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    sink = MemoryRawPayloadSink()
+    source = StooqBulkArchiveDailyBarSource(
+        archive_path,
+        expected_sha256=archive_sha256,
+        raw_sink=sink,
+        now=lambda: datetime(2024, 1, 4, tzinfo=UTC),
+    )
+    request = BarRequest(AssetKey("TEST"), date(2024, 1, 2), date(2024, 1, 2))
+    batch = asyncio.run(source.fetch_bars(request))
+
+    assert len(batch.bars) == 1
+    assert batch.bars[0].event_time.date() == date(2024, 1, 2)
+    assert batch.bars[0].close == 11
+    assert sink.payloads[batch.raw_sha256].body == body
+    assert archive_sha256 in batch.warnings[1]
+    assert "operator-attested" in batch.warnings[2]
+
+
+def test_stooq_bulk_archive_rejects_hash_mismatch(tmp_path: Path) -> None:
+    archive_path = tmp_path / "d_us_txt.zip"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr("data/daily/us/nyse stocks/1/test.us.txt", "not used")
+
+    with pytest.raises(SourceError, match="SHA-256 mismatch"):
+        StooqBulkArchiveDailyBarSource(
+            archive_path,
+            expected_sha256="0" * 64,
+        )
 
 
 def test_yahoo_uses_adjusted_close_and_actions() -> None:
