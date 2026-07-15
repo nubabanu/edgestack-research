@@ -1,0 +1,13 @@
+profile: smoke
+data:
+  # The frozen Monday-effect replication needs the pre-1975 control era.
+  start: 1960-01-01
+stats:
+  seed: 42
+  bootstrap_reps: 500
+  finalist_bootstrap_reps: 2000
+grid:
+  max_interaction_order: 1
+  min_observations: 100
+live:
+  enabled: false

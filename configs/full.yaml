@@ -1,0 +1,12 @@
+profile: full
+data:
+  start: 1960-01-01
+stats:
+  seed: 42
+  bootstrap_reps: 2000
+  finalist_bootstrap_reps: 10000
+grid:
+  max_interaction_order: 2
+  min_observations: 100
+live:
+  enabled: false

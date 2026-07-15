@@ -1,0 +1,239 @@
+"""Typed YAML configuration and deterministic resolution."""
+
+from __future__ import annotations
+
+import os
+import re
+from datetime import date
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class StrictModel(BaseModel):
+    """Base configuration model that rejects misspelled keys."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class PathsConfig(StrictModel):
+    """Local storage roots."""
+
+    root: Path = Path(".")
+    raw: Path = Path("data/raw")
+    canonical: Path = Path("data/canonical")
+    artifacts: Path = Path("artifacts")
+    catalog: Path = Path("artifacts/edgestack.sqlite")
+
+
+class ProviderConfig(StrictModel):
+    """Provider order and rate limits."""
+
+    order: tuple[str, ...] = ("tiingo", "stooq", "yfinance")
+    tiingo_api_key_env: str = "TIINGO_API_KEY"
+    finnhub_api_key_env: str = "FINNHUB_API_KEY"
+    alpha_vantage_api_key_env: str = "ALPHAVANTAGE_API_KEY"
+    timeout_seconds: float = 30.0
+    max_attempts: int = 6
+    concurrency: int = 4
+
+
+class DataConfig(StrictModel):
+    """Historical-data and QA policy."""
+
+    # The frozen Monday-effect replication requires a pre-1975 benchmark.
+    # Individual listing eligibility still begins at each asset's first bar.
+    start: date = date(1960, 1, 1)
+    providers: ProviderConfig = Field(default_factory=ProviderConfig)
+    etfs: tuple[str, ...] = (
+        "SPY",
+        "QQQ",
+        "IWM",
+        "XLK",
+        "XLF",
+        "XLE",
+        "XLV",
+        "XLY",
+        "XLI",
+    )
+    reconciliation_tickers: tuple[str, ...] = (
+        "SPY",
+        "QQQ",
+        "IWM",
+        "AAPL",
+        "MSFT",
+        "AMZN",
+        "NVDA",
+        "JPM",
+        "JNJ",
+        "XOM",
+        "WMT",
+        "PG",
+        "KO",
+        "PEP",
+        "IBM",
+        "INTC",
+        "CSCO",
+        "HD",
+        "CAT",
+        "BA",
+    )
+    reconciliation_tolerance: float = 0.005
+    reconciliation_required_fraction: float = 0.99
+    missing_bar_max_fraction: float = 0.001
+    outlier_sigma: float = 10.0
+    stale_sessions: int = 3
+    holdout_years: int = 3
+
+
+class GridConfig(StrictModel):
+    """Hypothesis grammar."""
+
+    max_interaction_order: Literal[1, 2] = 2
+    directions: tuple[str, ...] = ("LONG", "SHORT")
+    close_holding_periods: tuple[int, ...] = (1, 3, 5, 21)
+    sessions: tuple[str, ...] = ("close_to_close", "overnight", "intraday")
+    placebo_replicates: int = 2
+    include_cross_sectional: bool = True
+    min_observations: int = 100
+
+
+class StatsConfig(StrictModel):
+    """Frozen statistical thresholds."""
+
+    seed: int = 42
+    hard_t: float = 3.0
+    fdr_q: float = 0.05
+    dsr_probability: float = 0.95
+    bootstrap_reps: int = 2_000
+    finalist_bootstrap_reps: int = 10_000
+    survivor_fraction_max: float = 0.05
+    placebo_survival_max: float = 0.005
+
+
+class ValidationConfig(StrictModel):
+    """Out-of-sample and stability policy."""
+
+    min_train_years: int = 5
+    test_years: int = 1
+    step_years: int = 1
+    oos_t: float = 2.0
+    oos_positive_fraction: float = 0.5
+    stability_min: float = 0.75
+    cpcv_groups: int = 6
+    cpcv_test_groups: int = 2
+    purge_sessions: int = 21
+    embargo_sessions: int = 21
+    pbo_max: float = 0.20
+    rolling_years: int = 5
+
+
+class CostConfig(StrictModel):
+    """Baseline $100k retail research-cost model."""
+
+    capital: float = 100_000.0
+    commission_per_side: float = 0.0
+    etf_full_spread_bps: float = 1.0
+    equity_full_spread_bps: float = 3.0
+    base_slippage_bps: float = 1.0
+    impact_coefficient_bps: float = 10.0
+    max_impact_bps: float = 50.0
+    easy_borrow_annual: float = 0.003
+    turnover_penalty_bps: float = 1.0
+    sensitivity_multipliers: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+
+
+class EntryTimingConfig(StrictModel):
+    """Pre-registered timing neighborhoods."""
+
+    rsi2_thresholds: tuple[int, ...] = (5, 10, 15)
+    bollinger_thresholds: tuple[float, ...] = (0.1, 0.2, 0.3)
+    expiry_bars: tuple[int, ...] = (3, 5, 7)
+    breakout_windows: tuple[int, ...] = (20, 63, 252)
+    atr_multipliers: tuple[float, ...] = (1.5, 2.0, 2.5)
+    ma_window: int = 200
+    vix_low: float = 15.0
+    vix_high: float = 25.0
+    plateau_within: float = 0.20
+    recency_weighting: bool = False
+
+
+class LiveConfig(StrictModel):
+    """Paper-assistant scheduling and risk settings."""
+
+    enabled: bool = False
+    timezone: str = "America/New_York"
+    scan_time: str = "08:30"
+    poll_minutes: int = 15
+    top_n: int = 5
+    minimum_confidence: int = 60
+    capital: float = 100_000.0
+    target_risk_fraction: float = 0.005
+    max_position_fraction: float = 0.10
+    atr_stop_multiple: float = 2.0
+    allow_unverified_paper_shorts: bool = True
+    channels: tuple[str, ...] = ("console",)
+
+    @field_validator("scan_time")
+    @classmethod
+    def validate_scan_time(cls, value: str) -> str:
+        """Validate a simple 24-hour HH:MM value."""
+
+        import datetime as dt
+
+        dt.datetime.strptime(value, "%H:%M")
+        return value
+
+
+class EdgeStackConfig(StrictModel):
+    """Root EdgeStack configuration."""
+
+    profile: Literal["smoke", "full"] = "smoke"
+    as_of: date | None = None
+    paths: PathsConfig = Field(default_factory=PathsConfig)
+    data: DataConfig = Field(default_factory=DataConfig)
+    grid: GridConfig = Field(default_factory=GridConfig)
+    stats: StatsConfig = Field(default_factory=StatsConfig)
+    validation: ValidationConfig = Field(default_factory=ValidationConfig)
+    costs: CostConfig = Field(default_factory=CostConfig)
+    entrytiming: EntryTimingConfig = Field(default_factory=EntryTimingConfig)
+    live: LiveConfig = Field(default_factory=LiveConfig)
+
+    @model_validator(mode="after")
+    def validate_cross_fields(self) -> EdgeStackConfig:
+        """Reject internally inconsistent threshold settings."""
+
+        if self.validation.embargo_sessions < max(self.grid.close_holding_periods):
+            raise ValueError("embargo_sessions must cover the longest holding period")
+        if self.live.minimum_confidence not in range(101):
+            raise ValueError("minimum_confidence must be between 0 and 100")
+        return self
+
+
+_ENV_PATTERN = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
+
+
+def _expand_env(value: Any) -> Any:
+    if isinstance(value, str):
+        return _ENV_PATTERN.sub(lambda m: os.environ.get(m.group(1), ""), value)
+    if isinstance(value, list):
+        return [_expand_env(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _expand_env(item) for key, item in value.items()}
+    return value
+
+
+def load_config(path: str | Path) -> EdgeStackConfig:
+    """Load and validate an EdgeStack YAML configuration."""
+
+    config_path = Path(path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    return EdgeStackConfig.model_validate(_expand_env(payload))
+
+
+def dump_resolved_config(config: EdgeStackConfig) -> str:
+    """Serialize a resolved configuration deterministically."""
+
+    return yaml.safe_dump(config.model_dump(mode="json"), sort_keys=True)
