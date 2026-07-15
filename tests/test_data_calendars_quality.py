@@ -15,6 +15,7 @@ from edgestack.data.calendars import (
 from edgestack.data.quality import (
     audit_instrument,
     causal_outlier_mask,
+    causal_winsorize_prices,
     reconcile_adjusted_series,
 )
 
@@ -84,3 +85,40 @@ def test_reconciliation_uses_rebased_total_return_levels() -> None:
     )
     assert result.passed
     assert result.agreement_fraction == 1
+
+
+def test_linear_winsorizer_matches_naive_expanding_reference() -> None:
+    rng = np.random.default_rng(77)
+    returns = rng.normal(0.0002, 0.012, 400)
+    returns[[80, 190, 310]] = [0.60, -0.55, 0.75]
+    prices = 100.0 * np.exp(np.cumsum(returns))
+    frame = pd.DataFrame(
+        {
+            "symbol": "ABC",
+            "session": pd.bdate_range("2020-01-02", periods=len(prices)),
+            "close": prices,
+        }
+    )
+
+    corrected, records = causal_winsorize_prices(
+        frame, symbol="ABC", sigma=4.0, minimum_history=20
+    )
+
+    expected = prices.copy()
+    history: list[float] = []
+    for index in range(1, len(prices)):
+        raw = float(np.log(prices[index] / expected[index - 1]))
+        accepted = raw
+        if len(history) >= 20:
+            mean = float(np.mean(history))
+            deviation = float(np.std(history, ddof=1))
+            if deviation > 0.0:
+                accepted = min(
+                    max(raw, mean - 4.0 * deviation),
+                    mean + 4.0 * deviation,
+                )
+        expected[index] = expected[index - 1] * np.exp(accepted)
+        history.append(accepted)
+
+    np.testing.assert_allclose(corrected["research_close"], expected, rtol=1e-12)
+    assert records

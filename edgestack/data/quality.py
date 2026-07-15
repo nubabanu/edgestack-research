@@ -300,7 +300,13 @@ def causal_winsorize_prices(
     output_column = f"research_{price_column}"
     values = pd.to_numeric(data[price_column], errors="raise").to_numpy(float)
     corrected = values.copy()
-    accepted_returns: list[float] = []
+    # Welford's recurrence is algebraically the same expanding sample mean/std
+    # used by ``causal_outlier_mask`` but stays O(n) and numerically stable.  A
+    # prior implementation called ``np.mean``/``np.std`` over an ever-growing
+    # Python list for every observation, which made a full-universe campaign
+    # quadratic in each instrument's history.
+    accepted_mean = 0.0
+    accepted_m2 = 0.0
     records: list[CorrectionRecord] = []
     instrument = symbol or (
         str(data["symbol"].iloc[0])
@@ -310,14 +316,17 @@ def causal_winsorize_prices(
     for index in range(1, len(values)):
         raw_return = math.log(values[index] / corrected[index - 1])
         accepted = raw_return
-        if len(accepted_returns) >= minimum_history:
-            mean = float(np.mean(accepted_returns))
-            std = float(np.std(accepted_returns, ddof=1))
+        prior_count = index - 1
+        if prior_count >= minimum_history:
+            mean = accepted_mean
+            std = math.sqrt(max(accepted_m2 / (prior_count - 1), 0.0))
             if std > 0:
                 lower, upper = mean - sigma * std, mean + sigma * std
                 accepted = min(max(raw_return, lower), upper)
         corrected[index] = corrected[index - 1] * math.exp(accepted)
-        accepted_returns.append(accepted)
+        delta = accepted - accepted_mean
+        accepted_mean += delta / index
+        accepted_m2 += delta * (accepted - accepted_mean)
         if accepted != raw_return:
             records.append(
                 CorrectionRecord(
@@ -328,7 +337,7 @@ def causal_winsorize_prices(
                     float(corrected[index]),
                     f"causal return exceeded {sigma:g}-sigma prior-history bound",
                     "sequential_log_return_winsorization",
-                    len(accepted_returns) - 1,
+                    prior_count,
                 )
             )
     data[output_column] = corrected
