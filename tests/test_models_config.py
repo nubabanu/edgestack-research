@@ -83,3 +83,15 @@ def test_stooq_bulk_config_requires_a_hash_pinned_pair() -> None:
         EdgeStackConfig.model_validate(
             {"data": {"providers": {"stooq_bulk_archive": "d_us_txt.zip"}}}
         )
+
+
+def test_action_stratified_reconciliation_is_explicitly_versioned() -> None:
+    config = EdgeStackConfig.model_validate(
+        {"data": {"reconciliation_method": "action_stratified_returns"}}
+    )
+    assert config.data.reconciliation_method == "action_stratified_returns"
+
+    with pytest.raises(ValueError, match="reconciliation_method"):
+        EdgeStackConfig.model_validate(
+            {"data": {"reconciliation_method": "silently_blend_prices"}}
+        )

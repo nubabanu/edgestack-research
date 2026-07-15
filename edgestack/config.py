@@ -106,6 +106,9 @@ class DataConfig(StrictModel):
         "CAT",
         "BA",
     )
+    reconciliation_method: Literal[
+        "rebased_total_return", "action_stratified_returns"
+    ] = "rebased_total_return"
     reconciliation_tolerance: float = 0.005
     reconciliation_required_fraction: float = 0.99
     missing_bar_max_fraction: float = 0.001

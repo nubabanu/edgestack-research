@@ -64,6 +64,15 @@ Stooq does not publish a cryptographic signature.
 edgestack ingest --config configs/full-stooq-bulk.yaml --campaign-id <id> --as-of YYYY-MM-DD
 ```
 
+Stooq bulk OHLCV has no dividend/split ledger. If its historical adjustment basis
+conflicts with Yahoo adjusted levels, the separately preregistered
+`configs/full-stooq-action-stratified.yaml` protocol uses all available fields
+without blending provider prices: it compares Stooq and Yahoo raw close returns on
+non-action sessions over the fixed 20-year window, then checks Yahoo's explicit
+dividend/split ledger against Yahoo adjusted returns on action sessions. Both
+strata retain the same 0.5% tolerance and 99% requirement. Every artifact is
+marked `SINGLE_SOURCE_ACTIONS`; this is not independent confirmation of dividends.
+
 The gated campaign flow is:
 
 ```text

@@ -37,6 +37,7 @@ from edgestack.data.quality import (
     ReconciliationResult,
     audit_survivorship,
     causal_winsorize_prices,
+    reconcile_action_stratified_returns,
     reconcile_adjusted_series,
     run_quality_audit,
     write_correction_log,
@@ -478,6 +479,12 @@ async def _acquire_full(
                 "Stooq does not provide a cryptographic publisher signature.",
             )
         )
+    if config.data.reconciliation_method == "action_stratified_returns":
+        reference_warnings.append(
+            "SINGLE_SOURCE_ACTIONS: Stooq/Yahoo raw price returns are reconciled "
+            "on non-action sessions; Yahoo alone supplies dividends, splits, and "
+            "the canonical adjusted total-return series."
+        )
     factors = pd.DataFrame()
     fomc_dates = pd.DatetimeIndex([])
     try:
@@ -804,22 +811,37 @@ async def _reconcile_fixed_symbols(
                 _CommonProviderEvidence(symbol, (), failure),
                 failure,
             )
-        left_frame = bars_to_frame(left).assign(
-            close=lambda frame: frame["adjusted_close"]
-        )
-        right_frame = bars_to_frame(right).assign(
-            close=lambda frame: frame["adjusted_close"]
-        )
+        left_frame = bars_to_frame(left)
+        right_frame = bars_to_frame(right)
         common = _common_valid_sessions(left_frame, right_frame)
-        result = reconcile_adjusted_series(
-            left_frame,
-            right_frame,
-            symbol=symbol,
-            source_a="stooq",
-            source_b="yfinance",
-            tolerance=config.data.reconciliation_tolerance,
-            required_fraction=config.data.reconciliation_required_fraction,
-        )
+        if config.data.reconciliation_method == "action_stratified_returns":
+            comparison_start = (pd.Timestamp(as_of) - pd.DateOffset(years=20)).date()
+            result = reconcile_action_stratified_returns(
+                left_frame,
+                right_frame,
+                symbol=symbol,
+                source_a="stooq",
+                source_b="yfinance",
+                comparison_start=comparison_start,
+                tolerance=config.data.reconciliation_tolerance,
+                required_fraction=config.data.reconciliation_required_fraction,
+            )
+        else:
+            left_adjusted = left_frame.assign(
+                close=lambda frame: frame["adjusted_close"]
+            )
+            right_adjusted = right_frame.assign(
+                close=lambda frame: frame["adjusted_close"]
+            )
+            result = reconcile_adjusted_series(
+                left_adjusted,
+                right_adjusted,
+                symbol=symbol,
+                source_a="stooq",
+                source_b="yfinance",
+                tolerance=config.data.reconciliation_tolerance,
+                required_fraction=config.data.reconciliation_required_fraction,
+            )
         return (
             symbol,
             result,

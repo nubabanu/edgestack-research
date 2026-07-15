@@ -1,0 +1,16 @@
+profile: full
+data:
+  start: 1960-01-01
+  reconciliation_method: action_stratified_returns
+  providers:
+    stooq_bulk_archive: d_us_txt.zip
+    stooq_bulk_sha256: 973fccc87775d4de06b54a052c1ca9d5131065f2c22c158bcc3090d8ef5d81de
+stats:
+  seed: 42
+  bootstrap_reps: 2000
+  finalist_bootstrap_reps: 10000
+grid:
+  max_interaction_order: 2
+  min_observations: 100
+live:
+  enabled: false

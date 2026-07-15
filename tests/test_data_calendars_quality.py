@@ -16,6 +16,7 @@ from edgestack.data.quality import (
     audit_instrument,
     causal_outlier_mask,
     causal_winsorize_prices,
+    reconcile_action_stratified_returns,
     reconcile_adjusted_series,
 )
 
@@ -85,6 +86,49 @@ def test_reconciliation_uses_rebased_total_return_levels() -> None:
     )
     assert result.passed
     assert result.agreement_fraction == 1
+
+
+def test_action_stratified_reconciliation_separates_prices_and_actions() -> None:
+    sessions = pd.date_range("2024-01-02", periods=5, freq="B")
+    left = pd.DataFrame({"session": sessions, "close": [50.0, 50.5, 50.0, 51.0, 51.5]})
+    right = pd.DataFrame(
+        {
+            "session": sessions,
+            "close": [100.0, 101.0, 100.0, 102.0, 103.0],
+            "adjusted_close": [100.0, 101.0, 101.0, 103.02, 104.03],
+            "dividend": [0.0, 0.0, 1.0, 0.0, 0.0],
+            "split_factor": [1.0] * 5,
+        }
+    )
+    result = reconcile_action_stratified_returns(
+        left,
+        right,
+        symbol="ABC",
+        source_a="stooq",
+        source_b="yfinance",
+        comparison_start=date(2024, 1, 2),
+    )
+
+    assert result.passed
+    assert result.method == "action_stratified_returns"
+    assert result.price_observations == 3
+    assert result.excluded_action_sessions == 1
+    assert result.action_sessions == 1
+    assert result.action_agreement_fraction == 1
+    assert result.provenance_warning is not None
+    assert "SINGLE_SOURCE_ACTIONS" in result.provenance_warning
+
+    conflicting = left.copy()
+    conflicting.loc[4, "close"] = 60.0
+    failed = reconcile_action_stratified_returns(
+        conflicting,
+        right,
+        symbol="ABC",
+        source_a="stooq",
+        source_b="yfinance",
+        comparison_start=date(2024, 1, 2),
+    )
+    assert not failed.passed
 
 
 def test_linear_winsorizer_matches_naive_expanding_reference() -> None:

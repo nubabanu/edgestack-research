@@ -135,6 +135,14 @@ rows from different daily-bar providers are never spliced into one snapshot. The
 20-symbol reconciliation gate deliberately compares independent Stooq and Yahoo
 series rather than hiding disagreement through blending.
 
+The versioned `action_stratified_returns` policy is available when Stooq bulk
+levels and Yahoo total-return levels use incompatible historical adjustment
+bases. It never averages or rewrites prices. Independent raw close returns are
+compared on non-action sessions, while Yahoo's explicit dividend/split ledger is
+checked for internal consistency with Yahoo adjusted returns on action sessions.
+The same frozen tolerance and required fraction apply to both strata, and all
+evidence carries `SINGLE_SOURCE_ACTIONS` because Stooq supplies no action ledger.
+
 ## Gates and holdout isolation
 
 Each command reads the predecessor's persisted `GateResult`. Missing, failed, or
@@ -155,4 +163,3 @@ logical event creation and retryable, at-least-once external delivery. External
 channels may deliver duplicates, so every message carries stable recommendation,
 revision, and event IDs. A consumer can therefore deduplicate safely after a crash
 or restart.
-

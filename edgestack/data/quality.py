@@ -60,7 +60,7 @@ class InstrumentQuality:
 
 @dataclass(frozen=True, slots=True)
 class ReconciliationResult:
-    """Rebased total-return comparison for one symbol/provider pair."""
+    """Versioned comparison evidence for one symbol/provider pair."""
 
     symbol: str
     source_a: str
@@ -70,6 +70,13 @@ class ReconciliationResult:
     tolerance: float
     max_relative_difference: float
     passed: bool
+    method: str = "rebased_total_return"
+    price_observations: int = 0
+    excluded_action_sessions: int = 0
+    action_sessions: int = 0
+    action_agreement_fraction: float | None = None
+    action_max_relative_difference: float | None = None
+    provenance_warning: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,6 +454,167 @@ def reconcile_adjusted_series(
         tolerance,
         float(relative.max()),
         fraction >= required_fraction,
+    )
+
+
+def reconcile_action_stratified_returns(
+    frame_a: pd.DataFrame,
+    frame_b: pd.DataFrame,
+    *,
+    symbol: str,
+    source_a: str,
+    source_b: str,
+    comparison_start: date,
+    tolerance: float = 0.005,
+    required_fraction: float = 0.99,
+) -> ReconciliationResult:
+    """Reconcile independent prices separately from single-source actions.
+
+    Stooq's bulk OHLCV files do not contain dividends or split events, so their
+    adjusted levels cannot honestly be called an independently reconstructed
+    total-return index.  This protocol instead compares provider raw close gross
+    returns on non-action sessions.  On Yahoo action sessions it independently
+    checks that Yahoo's explicit dividend/split ledger reproduces Yahoo's adjusted
+    return.  The same tolerance and required fraction apply to both strata.
+
+    The canonical research history may still use Yahoo adjusted prices, but the
+    returned provenance warning makes clear that corporate actions remain
+    single-source evidence.
+    """
+
+    if tolerance <= 0 or not 0 < required_fraction <= 1:
+        raise ValueError("invalid reconciliation tolerances")
+    left_required = {"session", "close"}
+    right_required = {
+        "session",
+        "close",
+        "adjusted_close",
+        "dividend",
+        "split_factor",
+    }
+    if not left_required.issubset(frame_a):
+        raise ValueError("left frame requires session and close")
+    if not right_required.issubset(frame_b):
+        raise ValueError(
+            "right frame requires raw/adjusted closes and corporate actions"
+        )
+
+    left = frame_a.loc[:, ["session", "close"]].copy()
+    left.columns = ["session", "price_a"]
+    right = frame_b.loc[
+        :, ["session", "close", "adjusted_close", "dividend", "split_factor"]
+    ].copy()
+    right.columns = [
+        "session",
+        "price_b",
+        "adjusted_b",
+        "dividend_b",
+        "split_b",
+    ]
+    for frame in (left, right):
+        frame["session"] = pd.to_datetime(frame["session"]).dt.normalize()
+        if frame["session"].duplicated().any():
+            raise ValueError("provider frame contains duplicate sessions")
+        frame.sort_values("session", kind="stable", inplace=True)
+    for column in ("price_a",):
+        left[column] = pd.to_numeric(left[column], errors="coerce")
+    for column in ("price_b", "adjusted_b", "dividend_b", "split_b"):
+        right[column] = pd.to_numeric(right[column], errors="coerce")
+
+    left["price_gross_a"] = left["price_a"].div(left["price_a"].shift(1))
+    right["price_gross_b"] = right["price_b"].div(right["price_b"].shift(1))
+    right["adjusted_gross_b"] = right["adjusted_b"].div(right["adjusted_b"].shift(1))
+    right["ledger_gross_b"] = (
+        right["price_b"]
+        .add(right["dividend_b"].fillna(0.0))
+        .div(right["price_b"].shift(1))
+    )
+    right["action_session"] = right["dividend_b"].fillna(0.0).ne(0.0) | right[
+        "split_b"
+    ].fillna(1.0).ne(1.0)
+
+    common = left.merge(right, on="session", validate="one_to_one")
+    common = common.loc[
+        common["session"] >= pd.Timestamp(comparison_start)
+    ].sort_values("session", kind="stable")
+    positive_prices = (
+        common["price_gross_a"].gt(0)
+        & common["price_gross_b"].gt(0)
+        & np.isfinite(common["price_gross_a"])
+        & np.isfinite(common["price_gross_b"])
+    )
+    price_rows = common.loc[positive_prices & ~common["action_session"]]
+    if price_rows.empty:
+        return ReconciliationResult(
+            symbol,
+            source_a,
+            source_b,
+            len(common),
+            0.0,
+            tolerance,
+            math.inf,
+            False,
+            method="action_stratified_returns",
+            provenance_warning=(
+                "SINGLE_SOURCE_ACTIONS: no eligible non-action price observations"
+            ),
+        )
+    price_relative = (
+        price_rows["price_gross_a"]
+        .sub(price_rows["price_gross_b"])
+        .abs()
+        .div(price_rows["price_gross_b"].abs())
+    )
+    price_fraction = float((price_relative <= tolerance).mean())
+
+    action_valid = (
+        common["action_session"]
+        & common["ledger_gross_b"].gt(0)
+        & common["adjusted_gross_b"].gt(0)
+        & np.isfinite(common["ledger_gross_b"])
+        & np.isfinite(common["adjusted_gross_b"])
+    )
+    action_rows = common.loc[action_valid]
+    action_relative = (
+        action_rows["ledger_gross_b"]
+        .sub(action_rows["adjusted_gross_b"])
+        .abs()
+        .div(action_rows["adjusted_gross_b"].abs())
+    )
+    action_fraction = (
+        float((action_relative <= tolerance).mean())
+        if not action_relative.empty
+        else 1.0
+    )
+    expected_action_sessions = int(common["action_session"].sum())
+    passed = (
+        price_fraction >= required_fraction
+        and action_fraction >= required_fraction
+        and len(action_relative) == expected_action_sessions
+    )
+    warning = (
+        "SINGLE_SOURCE_ACTIONS: raw price returns are independently reconciled "
+        "on non-action sessions; Yahoo alone supplies dividends, splits, and the "
+        "canonical adjusted total-return series."
+    )
+    return ReconciliationResult(
+        symbol,
+        source_a,
+        source_b,
+        len(common),
+        price_fraction,
+        tolerance,
+        float(price_relative.max()),
+        passed,
+        method="action_stratified_returns",
+        price_observations=len(price_relative),
+        excluded_action_sessions=expected_action_sessions,
+        action_sessions=len(action_relative),
+        action_agreement_fraction=action_fraction,
+        action_max_relative_difference=(
+            float(action_relative.max()) if not action_relative.empty else None
+        ),
+        provenance_warning=warning,
     )
 
 
