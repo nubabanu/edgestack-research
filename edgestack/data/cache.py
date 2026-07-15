@@ -510,6 +510,36 @@ class DataCache:
             row = connection.execute(query, parameters).fetchone()
         return self.get_snapshot(row["snapshot_id"]) if row is not None else None
 
+    def exact_snapshot(self, request: BarRequest) -> CachedSnapshot | None:
+        """Return the newest immutable snapshot for an identical bar request.
+
+        Exact request matching is the only automatic reuse policy.  It prevents
+        a shorter history, different adjustment convention, or another asset
+        identity from silently satisfying a campaign request while making a
+        killed campaign restartable without downloading hundreds of unchanged
+        whole-series payloads again.
+        """
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT snapshot_id FROM data_snapshot
+                WHERE symbol=? AND exchange=? AND asset_type=?
+                  AND start_date=? AND end_date=? AND requested_adjusted=?
+                ORDER BY fetched_at DESC, snapshot_id DESC
+                LIMIT 1
+                """,
+                (
+                    request.asset.symbol,
+                    request.asset.exchange,
+                    request.asset.asset_type,
+                    request.start.isoformat(),
+                    request.end.isoformat(),
+                    int(request.adjusted),
+                ),
+            ).fetchone()
+        return self.get_snapshot(row["snapshot_id"]) if row is not None else None
+
     def read_frame(
         self,
         snapshot_id: str,

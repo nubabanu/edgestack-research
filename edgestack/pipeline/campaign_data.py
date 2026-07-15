@@ -409,10 +409,24 @@ async def _acquire_full(
     requests = tuple(
         BarRequest(asset, config.data.start, as_of, adjusted=True) for asset in assets
     )
-    batches, failures = await _fetch_individually(
-        chain, requests, concurrency=config.data.providers.concurrency
+    snapshots_by_asset = {
+        request.asset: cached
+        for request in requests
+        if (cached := cache.exact_snapshot(request)) is not None
+    }
+    pending_requests = tuple(
+        request for request in requests if request.asset not in snapshots_by_asset
     )
-    snapshots = [cache.store_batch(batch) for batch in batches]
+    batches, failures = await _fetch_individually(
+        chain, pending_requests, concurrency=config.data.providers.concurrency
+    )
+    for batch in batches:
+        snapshots_by_asset[batch.request.asset] = cache.store_batch(batch)
+    snapshots = [
+        snapshots_by_asset[request.asset]
+        for request in requests
+        if request.asset in snapshots_by_asset
+    ]
     frames = [
         _canonical_adjusted_frame(
             cache.read_frame(item.snapshot_id, representation="adjusted")
@@ -435,6 +449,12 @@ async def _acquire_full(
 
     reference_cache = ReferenceDataCache(cache.canonical_root / "reference")
     reference_warnings: list[str] = []
+    reused_count = len(requests) - len(pending_requests)
+    if reused_count:
+        reference_warnings.append(
+            f"EXACT_IMMUTABLE_CACHE_REUSE: {reused_count} whole-series snapshots "
+            "matched asset/start/end/adjustment identity."
+        )
     source_hashes: dict[str, str] = {
         item.asset.symbol: item.raw_sha256 for item in snapshots
     }

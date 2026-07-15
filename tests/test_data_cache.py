@@ -47,6 +47,23 @@ def test_cache_keeps_raw_and_adjusted_partitions_immutable(tmp_path) -> None:
 
     snapshot = cache.store_batch(batch)
     assert cache.store_batch(batch) == snapshot
+    assert cache.exact_snapshot(request) == snapshot
+    assert (
+        cache.exact_snapshot(
+            BarRequest(request.asset, request.start, request.end, adjusted=False)
+        )
+        is None
+    )
+    assert (
+        cache.exact_snapshot(
+            BarRequest(
+                request.asset,
+                request.start,
+                request.end + timedelta(days=1),
+            )
+        )
+        is None
+    )
     raw = cache.read_frame(snapshot.snapshot_id, representation="raw")
     adjusted = cache.read_frame(snapshot.snapshot_id, representation="adjusted")
     actions = cache.read_frame(snapshot.snapshot_id, representation="actions")
