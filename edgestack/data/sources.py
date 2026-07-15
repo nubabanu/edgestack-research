@@ -221,6 +221,12 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _datetime_from_unix(seconds: int) -> datetime:
+    """Convert Unix seconds without the Windows pre-1970 CRT limitation."""
+
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=seconds)
+
+
 def _daily_times(session_value: Any) -> tuple[datetime, datetime]:
     session = pd.Timestamp(session_value)
     if session.tzinfo is not None:
@@ -622,7 +628,7 @@ class YahooDailyBarSource(_HttpSource):
             bars.append(
                 _bar(
                     request,
-                    session=datetime.fromtimestamp(timestamp, tz=UTC).date(),
+                    session=_datetime_from_unix(timestamp).date(),
                     source=self.name,
                     open_=_at(quote_data.get("open"), index),
                     high=_at(quote_data.get("high"), index),
@@ -767,9 +773,7 @@ class YahooQuoteSource(_HttpSource):
                 Quote(
                     asset=asset,
                     price=float(closes[index]),
-                    provider_time=datetime.fromtimestamp(
-                        int(timestamps[index]), tz=UTC
-                    ),
+                    provider_time=_datetime_from_unix(int(timestamps[index])),
                     received_at=received_at,
                     source=self.name,
                     delayed_minutes=15,

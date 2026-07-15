@@ -87,6 +87,44 @@ def test_yahoo_uses_adjusted_close_and_actions() -> None:
     assert "SURVIVORSHIP_BIASED" in batch.warnings[0]
 
 
+def test_yahoo_parses_pre_1970_unix_dates_on_windows() -> None:
+    timestamp = int(datetime(1962, 1, 2, tzinfo=UTC).timestamp())
+    payload = {
+        "chart": {
+            "error": None,
+            "result": [
+                {
+                    "timestamp": [timestamp],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [10.0],
+                                "high": [11.0],
+                                "low": [9.0],
+                                "close": [10.5],
+                                "volume": [1000],
+                            }
+                        ],
+                        "adjclose": [{"adjclose": [1.25]}],
+                    },
+                }
+            ],
+        }
+    }
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=json.dumps(payload).encode())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    source = YahooDailyBarSource(client=client, minimum_interval=0)
+    request = BarRequest(AssetKey("OLD"), date(1960, 1, 1), date(1965, 1, 1))
+    batch = asyncio.run(source.fetch_bars(request))
+    asyncio.run(client.aclose())
+
+    assert batch.bars[0].event_time.date() == date(1962, 1, 2)
+    assert batch.bars[0].adjusted_close == 1.25
+
+
 def test_fallback_never_splices_failed_provider() -> None:
     request = BarRequest(AssetKey("TEST"), date(2024, 1, 1), date(2024, 1, 3))
 
