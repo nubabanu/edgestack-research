@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.edgestack.mobile.data.AppSettings
+import com.edgestack.mobile.data.ConnectionProbe
 import com.edgestack.mobile.data.EdgeStackRepository
 import com.edgestack.mobile.data.MobileSnapshot
 import com.edgestack.mobile.data.SettingsStore
@@ -24,6 +25,8 @@ data class MainUiState(
     val fatalError: String? = null,
     val settings: AppSettings? = null,
     val token: String = "",
+    val probing: Boolean = false,
+    val probe: ConnectionProbe? = null,
 )
 
 class MainViewModel(
@@ -49,6 +52,24 @@ class MainViewModel(
 
     fun setToken(value: String) {
         mutableState.update { it.copy(token = value) }
+    }
+
+    fun testConnection(apiUrl: String, token: String) {
+        setToken(token)
+        viewModelScope.launch {
+            mutableState.update { it.copy(probing = true, probe = null) }
+            val result = runCatching { repository.probe(apiUrl, token) }
+                .getOrElse { error ->
+                    ConnectionProbe(
+                        ok = false,
+                        serverReachable = false,
+                        mode = null,
+                        tokenAccepted = null,
+                        message = error.message ?: "Connection test failed",
+                    )
+                }
+            mutableState.update { it.copy(probing = false, probe = result) }
+        }
     }
 
     fun saveSettings(apiUrl: String, demoMode: Boolean, token: String) {

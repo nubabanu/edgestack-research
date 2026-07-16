@@ -110,7 +110,15 @@ evidence or display it as a network-validated promoted snapshot.
 - **Evidence** replays holdout coverage, mean returns, terminal wealth, hashes,
   and audit events. It cannot trigger a recomputation.
 - **Setup** selects demo/network mode and an endpoint. Bearer tokens are held in
-  memory and must be re-entered after process death.
+  memory and must be re-entered after process death. A **Test connection**
+  button probes the server before saving: it reports reachability (with a
+  Wi-Fi/server/firewall checklist on failure), whether the server is SEALED
+  or demo, and whether the bearer token is accepted — without loading a full
+  snapshot. Cleartext `http://` is accepted only for private-LAN (RFC 1918),
+  Tailscale CGNAT (`100.64.0.0/10`), and loopback addresses; everything else
+  requires HTTPS. This makes home-Wi-Fi (`http://192.168.x.x:8765`) and
+  Tailscale (`http://100.x.y.z:8765`) work out of the box while public
+  endpoints stay TLS-only.
 
 The decoder rejects unknown fields, unsupported schema versions, non-contiguous
 ranks, duplicate recommendation IDs, a promoted model without a passed holdout,

@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext must be permitted at the platform layer because Android's
+  domain-config cannot express IP ranges. The REAL cleartext gate is
+  SnapshotClient.validateBaseUrl, which refuses http:// for anything that is
+  not a private-LAN (RFC 1918), Tailscale CGNAT (100.64/10), or loopback
+  address before any request is made. Public endpoints still require HTTPS.
+-->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">10.0.2.2</domain>
-        <domain includeSubdomains="false">localhost</domain>
-    </domain-config>
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

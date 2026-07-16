@@ -38,6 +38,9 @@ class EdgeStackRepository(
         }
     }
 
+    suspend fun probe(apiUrl: String, bearerToken: String): ConnectionProbe =
+        client.probe(apiUrl, bearerToken)
+
     private suspend fun demo(): SnapshotResult = withContext(Dispatchers.IO) {
         val raw = context.resources.openRawResource(R.raw.demo_snapshot)
             .bufferedReader()

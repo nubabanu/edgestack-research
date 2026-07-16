@@ -577,6 +577,28 @@ private fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
         }
         item {
             Button(
+                onClick = { viewModel.testConnection(endpoint, token) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !demo && !state.probing,
+            ) { Text(if (state.probing) "Testing…" else "Test connection") }
+        }
+        state.probe?.let { probe ->
+            item {
+                Notice(probe.message, if (probe.ok) Mint else Coral)
+            }
+            if (!probe.serverReachable) {
+                item {
+                    SectionCard("Checklist") {
+                        Text("• Phone on the same Wi-Fi as the server (not mobile data)", color = Fog)
+                        Text("• Server window still running (edgestack mobile-api)", color = Fog)
+                        Text("• Firewall rule added for the server port", color = Fog)
+                        Text("• Away from home? Use the Tailscale 100.x address", color = Fog)
+                    }
+                }
+            }
+        }
+        item {
+            Button(
                 onClick = { viewModel.saveSettings(endpoint, demo, token) },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = demo || token.length >= 24,
