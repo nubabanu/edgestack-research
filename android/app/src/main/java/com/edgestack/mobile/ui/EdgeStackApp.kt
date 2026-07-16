@@ -527,9 +527,11 @@ private fun EvidenceScreen(snapshot: MobileSnapshot) {
 @Composable
 private fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
     val settings = state.settings ?: return
-    var endpoint by remember(settings.apiUrl) { mutableStateOf(settings.apiUrl) }
-    var demo by remember(settings.demoMode) { mutableStateOf(settings.demoMode) }
-    var token by remember(state.token) { mutableStateOf(state.token) }
+    // Drafts live in the ViewModel so an unsaved toggle or URL edit survives
+    // switching tabs; saved settings are the fallback when nothing is drafted.
+    val endpoint = state.draftApiUrl ?: settings.apiUrl
+    val demo = state.draftDemo ?: settings.demoMode
+    val token = state.token
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -547,17 +549,17 @@ private fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
                         Text("Offline demonstration", fontWeight = FontWeight.Bold)
                         Text("Clearly labeled static sample data", color = Fog)
                     }
-                    Switch(checked = demo, onCheckedChange = { demo = it })
+                    Switch(checked = demo, onCheckedChange = viewModel::setDraftDemo)
                 }
             }
         }
         item {
             OutlinedTextField(
                 value = endpoint,
-                onValueChange = { endpoint = it },
+                onValueChange = viewModel::setDraftApiUrl,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("API base URL") },
-                supportingText = { Text("HTTPS, or local emulator host 10.0.2.2") },
+                supportingText = { Text("HTTPS; or plain HTTP for LAN 192.168.x, Tailscale 100.x, emulator 10.0.2.2") },
                 enabled = !demo,
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -566,7 +568,7 @@ private fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
         item {
             OutlinedTextField(
                 value = token,
-                onValueChange = { token = it; viewModel.setToken(it) },
+                onValueChange = viewModel::setToken,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Bearer token") },
                 supportingText = { Text("Held in memory only; never persisted") },

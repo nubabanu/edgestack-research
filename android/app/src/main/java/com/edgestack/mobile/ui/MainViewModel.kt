@@ -27,6 +27,10 @@ data class MainUiState(
     val token: String = "",
     val probing: Boolean = false,
     val probe: ConnectionProbe? = null,
+    // Unsaved Setup edits; they survive tab switches so a toggle or URL edit
+    // is never silently reverted before "Save and refresh".
+    val draftApiUrl: String? = null,
+    val draftDemo: Boolean? = null,
 )
 
 class MainViewModel(
@@ -54,6 +58,14 @@ class MainViewModel(
         mutableState.update { it.copy(token = value) }
     }
 
+    fun setDraftApiUrl(value: String) {
+        mutableState.update { it.copy(draftApiUrl = value) }
+    }
+
+    fun setDraftDemo(value: Boolean) {
+        mutableState.update { it.copy(draftDemo = value) }
+    }
+
     fun testConnection(apiUrl: String, token: String) {
         setToken(token)
         viewModelScope.launch {
@@ -76,7 +88,12 @@ class MainViewModel(
         setToken(token)
         viewModelScope.launch {
             runCatching { settingsStore.save(apiUrl, demoMode) }
-                .onSuccess { refresh(AppSettings(apiUrl.trim().removeSuffix("/"), demoMode)) }
+                .onSuccess {
+                    mutableState.update {
+                        it.copy(draftApiUrl = null, draftDemo = null)
+                    }
+                    refresh(AppSettings(apiUrl.trim().removeSuffix("/"), demoMode))
+                }
                 .onFailure { error ->
                     mutableState.update { it.copy(fatalError = error.message) }
                 }

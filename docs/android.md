@@ -81,6 +81,20 @@ When the server itself runs with `--demo`, the app accepts its response only as
 visibly labeled demonstration data. It does not cache that response as sealed
 evidence or display it as a network-validated promoted snapshot.
 
+## Quick start (one command on the PC)
+
+```powershell
+pwsh scripts/serve-mobile.ps1
+```
+
+The script creates (or reuses) the bearer token at
+`artifacts/advisor/mobile-token.txt` and prints it, refreshes the tailwind
+calendar the Timing tab reads, and starts the read-only API on port 8765.
+On the phone: same Wi-Fi (or Tailscale), API base URL `http://<pc-ip>:8765`,
+the printed token, demo mode off, then **Test connection** → **Save and
+refresh**. The one-time inbound firewall rule for the port must be added
+from an administrator terminal (the command is in the script header).
+
 ## Screens and behavior
 
 - **Plan** shows the next eligible closing-auction entry, submission deadline,
