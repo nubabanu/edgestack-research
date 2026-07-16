@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SnapshotCodecTest {
@@ -35,6 +36,20 @@ class SnapshotCodecTest {
         val root = Json.parseToJsonElement(validPayload()).jsonObject.toMutableMap()
         root["broker_order"] = JsonPrimitive("BUY")
         assertThrows(Exception::class.java) { SnapshotCodec.decode(JsonObject(root).toString()) }
+    }
+
+    @Test
+    fun `remote demo stays visibly demo and is never classified as sealed network evidence`() {
+        val sealed = SnapshotCodec.decode(validPayload())
+        val demo = sealed.copy(
+            meta = sealed.meta.copy(mode = SnapshotMode.DEMO),
+            modelStatus = "DEMO",
+        )
+
+        val result = networkSnapshotResult(demo)
+
+        assertEquals(SnapshotOrigin.DEMO, result.origin)
+        assertTrue(result.warning.orEmpty().contains("not sealed evidence"))
     }
 
     private fun validPayload(): String = """

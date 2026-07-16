@@ -18,9 +18,10 @@ class EdgeStackRepository(
             require(bearerToken.length >= 24) { "Enter the 24+ character API bearer token" }
             val raw = client.fetch(settings.apiUrl, bearerToken)
             val snapshot = SnapshotCodec.decode(raw)
-            require(snapshot.meta.mode == SnapshotMode.SEALED) { "Server returned non-sealed data" }
-            withContext(Dispatchers.IO) { cacheFile.writeText(raw, Charsets.UTF_8) }
-            SnapshotResult(snapshot, SnapshotOrigin.NETWORK)
+            if (snapshot.meta.mode == SnapshotMode.SEALED) {
+                withContext(Dispatchers.IO) { cacheFile.writeText(raw, Charsets.UTF_8) }
+            }
+            networkSnapshotResult(snapshot)
         }.getOrElse { failure ->
             val cached = runCatching {
                 withContext(Dispatchers.IO) { cacheFile.readText(Charsets.UTF_8) }
@@ -44,3 +45,13 @@ class EdgeStackRepository(
         SnapshotResult(SnapshotCodec.decode(raw), SnapshotOrigin.DEMO)
     }
 }
+
+internal fun networkSnapshotResult(snapshot: MobileSnapshot): SnapshotResult =
+    when (snapshot.meta.mode) {
+        SnapshotMode.SEALED -> SnapshotResult(snapshot, SnapshotOrigin.NETWORK)
+        SnapshotMode.DEMO -> SnapshotResult(
+            snapshot,
+            SnapshotOrigin.DEMO,
+            "Connected to the API demonstration endpoint; this is not sealed evidence.",
+        )
+    }

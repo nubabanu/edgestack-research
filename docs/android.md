@@ -77,6 +77,10 @@ disable demo mode, enter `http://10.0.2.2:8765`, and enter the bearer token.
 Physical devices should use an HTTPS URL. The network security policy allows
 cleartext only for `10.0.2.2` and localhost.
 
+When the server itself runs with `--demo`, the app accepts its response only as
+visibly labeled demonstration data. It does not cache that response as sealed
+evidence or display it as a network-validated promoted snapshot.
+
 ## Screens and behavior
 
 - **Plan** shows the next eligible closing-auction entry, submission deadline,
