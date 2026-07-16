@@ -65,6 +65,48 @@ def sessions_to_month_end(sessions: Sequence[object] | pd.DatetimeIndex) -> pd.S
     return pd.Series(values, index=index, name="sessions_to_month_end")
 
 
+def sessions_to_quarter_end(
+    sessions: Sequence[object] | pd.DatetimeIndex,
+) -> pd.Series:
+    """Return zero-based number of exchange sessions remaining in the quarter."""
+
+    index = _sessions_index(sessions)
+    frame = pd.DataFrame(index=index)
+    position = frame.groupby([index.year, index.quarter]).cumcount()
+    periods = index.to_period("Q")
+    counts = pd.Series(periods, index=index).groupby(periods).transform("size")
+    values = counts.to_numpy(dtype=np.int16) - position.to_numpy(dtype=np.int16) - 1
+    return pd.Series(values, index=index, name="sessions_to_quarter_end")
+
+
+def month_end_window(
+    sessions: Sequence[object] | pd.DatetimeIndex, *, window: int = 5
+) -> pd.Series:
+    """Flag the final ``window`` exchange sessions of each month.
+
+    Distinct from ``turn_of_month`` (last one + first three): this is the
+    institutional rebalancing-flow window BEFORE the month boundary.
+    """
+
+    if window < 1:
+        raise ValueError("window must be positive")
+    index = _sessions_index(sessions)
+    values = sessions_to_month_end(index).to_numpy() < window
+    return pd.Series(values, index=index, name="month_end_window")
+
+
+def quarter_end_window(
+    sessions: Sequence[object] | pd.DatetimeIndex, *, window: int = 5
+) -> pd.Series:
+    """Flag the final ``window`` exchange sessions of each calendar quarter."""
+
+    if window < 1:
+        raise ValueError("window must be positive")
+    index = _sessions_index(sessions)
+    values = sessions_to_quarter_end(index).to_numpy() < window
+    return pd.Series(values, index=index, name="quarter_end_window")
+
+
 def turn_of_month(
     sessions: Sequence[object] | pd.DatetimeIndex,
     *,
@@ -195,6 +237,9 @@ def calendar_features(
     features["session_of_month"] = session_of_month(index)
     features["sessions_to_month_end"] = sessions_to_month_end(index)
     features["turn_of_month"] = turn_of_month(index)
+    features["sessions_to_quarter_end"] = sessions_to_quarter_end(index)
+    features["month_end_window"] = month_end_window(index)
+    features["quarter_end_window"] = quarter_end_window(index)
     features = features.join(holiday_proximity(index, holidays))
     features = features.join(event_proximity(index, fomc_dates).add_prefix("fomc_"))
     features["opex_week"] = opex_week(index)

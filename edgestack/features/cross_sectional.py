@@ -113,6 +113,77 @@ def proximity_to_high(prices: pd.DataFrame, *, window: int = 252) -> pd.DataFram
     return result
 
 
+def amihud_illiquidity(
+    prices: pd.DataFrame,
+    volume: pd.DataFrame,
+    *,
+    window: int = 21,
+) -> pd.DataFrame:
+    """Trailing mean of |return| per dollar traded (Amihud, 2002).
+
+    Larger scores mean less liquid names. Values use only completed sessions
+    through ``t``.
+    """
+
+    frame = _prices_frame(prices)
+    if window < 2:
+        raise ValueError("window must be >=2")
+    if not frame.columns.equals(volume.columns) or not frame.index.equals(
+        volume.index
+    ):
+        raise ValueError("prices and volume must be exactly aligned")
+    returns = (frame / frame.shift(1) - 1.0).abs()
+    dollar_volume = frame.mul(volume.astype(float)).where(lambda v: v > 0.0)
+    daily = returns.div(dollar_volume)
+    result = daily.rolling(window=window, min_periods=window).mean()
+    result.attrs.update({"window": window, "available_at": "close"})
+    return result
+
+
+def max_lottery(prices: pd.DataFrame, *, window: int = 21) -> pd.DataFrame:
+    """Trailing maximum daily return (Bali, Cakici, and Whitelaw, 2011).
+
+    High-MAX names attract lottery demand and subsequently underperform, so
+    larger scores identify the SHORT side of the documented anomaly.
+    """
+
+    frame = _prices_frame(prices)
+    if window < 2:
+        raise ValueError("window must be >=2")
+    returns = frame / frame.shift(1) - 1.0
+    result = returns.rolling(window=window, min_periods=window).max()
+    result.attrs.update({"window": window, "available_at": "close"})
+    return result
+
+
+def overnight_intraday_gap(
+    open_prices: pd.DataFrame,
+    close_prices: pd.DataFrame,
+    *,
+    window: int = 21,
+) -> pd.DataFrame:
+    """Trailing mean overnight minus intraday return (Lou-Polk-Skouras).
+
+    A persistent clientele signal: names whose returns accrue overnight tend
+    to keep accruing them overnight. Both legs use completed sessions only.
+    """
+
+    opens = _prices_frame(open_prices)
+    closes = _prices_frame(close_prices)
+    if not opens.columns.equals(closes.columns) or not opens.index.equals(
+        closes.index
+    ):
+        raise ValueError("open and close frames must be exactly aligned")
+    if window < 2:
+        raise ValueError("window must be >=2")
+    overnight = opens / closes.shift(1) - 1.0
+    intraday = closes / opens - 1.0
+    gap = overnight - intraday
+    result = gap.rolling(window=window, min_periods=window).mean()
+    result.attrs.update({"window": window, "available_at": "close"})
+    return result
+
+
 def standardized_unexpected_earnings(
     actual: pd.DataFrame,
     consensus: pd.DataFrame,

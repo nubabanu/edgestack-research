@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import pandas as pd
 
-from edgestack.backtest.costs import CostModel
+from edgestack.backtest.costs import DEFAULT_ADV_FALLBACK_DOLLARS, CostModel
 from edgestack.backtest.engine import overlapping_cohort_targets, vectorized_backtest
 from edgestack.backtest.metrics import performance_metrics
 from edgestack.config import ReversalResearchConfig
@@ -212,8 +212,34 @@ def run_reversal_grid(
     specs = reversal_trial_specs(config, point_in_time_universe=point_in_time)
     adv = prepared.close.mul(prepared.volume).rolling(20, min_periods=1).mean().shift(1)
     adv_values = np.nan_to_num(
-        adv.to_numpy(dtype=float), nan=100_000_000.0, posinf=100_000_000.0
+        adv.to_numpy(dtype=float),
+        nan=DEFAULT_ADV_FALLBACK_DOLLARS,
+        posinf=DEFAULT_ADV_FALLBACK_DOLLARS,
     )
+    spread_matrix: np.ndarray[Any, np.dtype[np.float64]] | None = None
+    if config.spread_source == "MEASURED_HL_FLOOR_V2":
+        from edgestack.data.spreads import (
+            floored_spread_matrix,
+            monthly_median_spread_bps,
+        )
+
+        baseline = pd.Series(
+            [
+                (
+                    cost_model.assumptions.etf_full_spread_bps
+                    if asset_type == "etf"
+                    else cost_model.assumptions.equity_full_spread_bps
+                )
+                for asset_type in prepared.asset_types
+            ],
+            index=close.columns,
+            dtype=float,
+        )
+        spread_matrix = floored_spread_matrix(
+            monthly_median_spread_bps(prepared.high, prepared.low, close),
+            pd.DatetimeIndex(prepared.dates),
+            baseline_bps=baseline,
+        ).to_numpy(dtype=float)
     asset_returns = prepared.close_returns.to_numpy(dtype=float)
     benchmark = market_returns.to_numpy(dtype=float)
     rows: list[dict[str, Any]] = []
@@ -240,6 +266,7 @@ def run_reversal_grid(
             cost_model=cost_model,
             asset_type=prepared.asset_types,
             adv_dollars=adv_values,
+            full_spread_bps=spread_matrix,
         )
         active = np.abs(positions).sum(axis=1) > 0.0
         gross = np.where(active, gross, np.nan)
@@ -317,6 +344,7 @@ def run_reversal_grid(
                 "bias_tier": (
                     "POINT_IN_TIME" if point_in_time else "SURVIVORSHIP_BIASED"
                 ),
+                "spread_source": config.spread_source,
             }
         )
     metrics = pd.DataFrame(rows)

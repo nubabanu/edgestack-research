@@ -56,6 +56,14 @@ DEFAULT_PREDICATES: dict[str, tuple[str, ...]] = {
     "opex": ("WEEK",),
 }
 
+# Opt-in additions for extended-family campaigns. Kept out of
+# DEFAULT_PREDICATES so campaigns declared before these families existed keep
+# an identical grid.
+EXTENDED_PREDICATES: dict[str, tuple[str, ...]] = {
+    "quarter_end": ("WINDOW", "REST"),
+    "month_end": ("WINDOW", "REST"),
+}
+
 
 DEFAULT_RATIONALES: dict[str, RationaleCategory] = {
     "weekday": RationaleCategory.FLOW,
@@ -65,6 +73,8 @@ DEFAULT_RATIONALES: dict[str, RationaleCategory] = {
     "fomc": RationaleCategory.RISK_PREMIUM,
     "opex": RationaleCategory.MICROSTRUCTURE,
     "sector": RationaleCategory.RISK_PREMIUM,
+    "quarter_end": RationaleCategory.FLOW,
+    "month_end": RationaleCategory.FLOW,
 }
 
 
@@ -192,17 +202,53 @@ def hypothesis_count(config: GridConfig | None = None) -> int:
     return sum(1 for _ in iter_hypotheses(config))
 
 
-def cross_sectional_hypotheses() -> tuple[HypothesisSpec, ...]:
-    """Register the four canonical continuous cross-sectional families."""
+def cross_sectional_hypotheses(
+    *, extended: bool = False
+) -> tuple[HypothesisSpec, ...]:
+    """Register the canonical continuous cross-sectional families.
 
-    definitions = (
-        ("momentum_12_1", RationaleCategory.BEHAVIORAL, {"lookback": 252, "skip": 21}),
-        ("reversal_5d", RationaleCategory.MICROSTRUCTURE, {"lookback": 5}),
-        ("low_volatility", RationaleCategory.RISK_PREMIUM, {"window": 252}),
-        ("high_52w_proximity", RationaleCategory.BEHAVIORAL, {"window": 252}),
-    )
+    ``extended=True`` also declares the opt-in families added after the
+    original preregistration: Amihud illiquidity, MAX-lottery, the
+    overnight-vs-intraday clientele gap, and ETF-vs-market relative reversal.
+    """
+
+    definitions = [
+        (
+            "momentum_12_1",
+            RationaleCategory.BEHAVIORAL,
+            {"lookback": 252, "skip": 21},
+            21,
+        ),
+        ("reversal_5d", RationaleCategory.MICROSTRUCTURE, {"lookback": 5}, 5),
+        ("low_volatility", RationaleCategory.RISK_PREMIUM, {"window": 252}, 21),
+        ("high_52w_proximity", RationaleCategory.BEHAVIORAL, {"window": 252}, 21),
+    ]
+    if extended:
+        definitions.extend(
+            (
+                (
+                    "amihud_illiquidity",
+                    RationaleCategory.MICROSTRUCTURE,
+                    {"window": 21},
+                    21,
+                ),
+                ("max_lottery", RationaleCategory.BEHAVIORAL, {"window": 21}, 21),
+                (
+                    "overnight_intraday_gap",
+                    RationaleCategory.BEHAVIORAL,
+                    {"window": 21},
+                    5,
+                ),
+                (
+                    "etf_relative_reversal",
+                    RationaleCategory.MICROSTRUCTURE,
+                    {"lookback": 21},
+                    5,
+                ),
+            )
+        )
     specs: list[HypothesisSpec] = []
-    for family, rationale, metadata in definitions:
+    for family, rationale, metadata, holding in definitions:
         for direction in (Direction.LONG, Direction.SHORT):
             specs.append(
                 HypothesisSpec(
@@ -210,12 +256,58 @@ def cross_sectional_hypotheses() -> tuple[HypothesisSpec, ...]:
                     description=f"{direction.value} cross-sectional {family}",
                     predicates={},
                     session=Session.CLOSE_TO_CLOSE,
-                    holding_period=21 if family != "reversal_5d" else 5,
+                    holding_period=holding,
                     direction=direction,
                     rationale=rationale,
                     parameters=metadata,
                 )
             )
+    return tuple(specs)
+
+
+def conditional_combination_hypotheses() -> tuple[HypothesisSpec, ...]:
+    """Register cross-sectional-signal x calendar-gate combination candidates.
+
+    A combination is never a free improvement: each gated variant is one more
+    declared trial in the multiple-testing family, evaluated by the same
+    gauntlet as its components. The gate restricts WHEN the ranked entry may
+    act (conditional/gating combination); interaction value shows up as the
+    gated trial surviving where the ungated component or the bare calendar
+    window alone does not.
+    """
+
+    signal_families = (
+        ("momentum_12_1", RationaleCategory.BEHAVIORAL, {"lookback": 252, "skip": 21}),
+        ("reversal_5d", RationaleCategory.MICROSTRUCTURE, {"lookback": 5}),
+    )
+    gates: tuple[dict[str, str], ...] = (
+        {"weekday": "FRI"},
+        {"turn_of_month": "TOM"},
+        {"month_end": "WINDOW"},
+        {"quarter_end": "WINDOW"},
+    )
+    specs: list[HypothesisSpec] = []
+    for family, rationale, metadata in signal_families:
+        for gate in gates:
+            condition = " AND ".join(
+                f"{key}={value}" for key, value in sorted(gate.items())
+            )
+            for direction in (Direction.LONG, Direction.SHORT):
+                specs.append(
+                    HypothesisSpec(
+                        family=family,
+                        description=(
+                            f"{direction.value} cross-sectional {family} "
+                            f"gated when {condition}"
+                        ),
+                        predicates=dict(gate),
+                        session=Session.CLOSE_TO_CLOSE,
+                        holding_period=5,
+                        direction=direction,
+                        rationale=rationale,
+                        parameters={**metadata, "combination": "CALENDAR_GATED"},
+                    )
+                )
     return tuple(specs)
 
 

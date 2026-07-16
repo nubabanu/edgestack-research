@@ -15,7 +15,7 @@ from typing import cast
 
 import numpy as np
 
-from edgestack.backtest.costs import CostModel
+from edgestack.backtest.costs import DEFAULT_ADV_FALLBACK_DOLLARS, CostModel
 from edgestack.backtest.metrics import PerformanceMetrics, performance_metrics
 from edgestack.models import HypothesisSpec, Session, ensure_fill_after_signal
 from edgestack.stats._types import BoolArray, FloatArray
@@ -145,8 +145,9 @@ def vectorized_backtest(
     cost_model: CostModel | None = None,
     asset_type: str | Sequence[str] = "equity",
     order_dollars: float | None = None,
-    adv_dollars: float | FloatArray = 100_000_000.0,
+    adv_dollars: float | FloatArray = DEFAULT_ADV_FALLBACK_DOLLARS,
     cost_multiplier: float = 1.0,
+    full_spread_bps: FloatArray | None = None,
 ) -> tuple[FloatArray, FloatArray, FloatArray]:
     """Return gross, net, and lagged-position streams.
 
@@ -154,12 +155,16 @@ def vectorized_backtest(
     cross-section both arrays must be date-by-asset and are aggregated to dates.
     Missing asset returns contribute zero only for zero/finite weights; a date
     with all asset returns missing is reported as ``NaN``.
+    ``full_spread_bps`` optionally forwards a measured, baseline-floored
+    per-date-per-name spread matrix to the cost model.
     """
 
     raw_signal = np.asarray(signal, dtype=float)
     asset_returns = np.asarray(returns, dtype=float)
     if raw_signal.shape != asset_returns.shape:
         raise ValueError("signal and returns must have identical shape")
+    if full_spread_bps is not None:
+        full_spread_bps = np.asarray(full_spread_bps, dtype=float)
     positions = lag_positions(
         np.nan_to_num(raw_signal, nan=0.0), execution_lag=execution_lag
     )
@@ -184,6 +189,11 @@ def vectorized_backtest(
         order_dollars=order_dollars,
         adv_dollars=adv_dollars,
         multiplier=cost_multiplier,
+        full_spread_bps=(
+            full_spread_bps[:, None]
+            if full_spread_bps is not None and full_spread_bps.ndim == 1
+            else full_spread_bps
+        ),
     )
     net = gross - costs
     net[~np.isfinite(gross)] = np.nan
@@ -237,7 +247,7 @@ class SweepData:
     returns: FloatArray
     signals: Mapping[str, FloatArray]
     benchmark_returns: FloatArray | None = None
-    adv_dollars: float | FloatArray = 100_000_000.0
+    adv_dollars: float | FloatArray = DEFAULT_ADV_FALLBACK_DOLLARS
     asset_type: str = "equity"
 
 

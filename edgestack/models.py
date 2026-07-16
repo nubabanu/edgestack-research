@@ -564,6 +564,9 @@ class HoldoutFreezeManifest:
     lock_sha256: str
     model_mapping_sha256: str
     data_snapshot_id: str
+    # Bound at score time; freeze documents written before evaluator
+    # versioning existed carry the original sign-only semantics.
+    holdout_evaluator_version: str = "SIGN_V1"
 
 
 @runtime_checkable

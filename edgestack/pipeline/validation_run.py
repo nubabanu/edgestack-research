@@ -17,7 +17,11 @@ from edgestack.backtest.confirm import (
     zipline_available,
     zipline_backend_status,
 )
-from edgestack.backtest.costs import CostModel, break_even_cost_multiplier
+from edgestack.backtest.costs import (
+    DEFAULT_ADV_FALLBACK_DOLLARS,
+    CostModel,
+    break_even_cost_multiplier,
+)
 from edgestack.config import EdgeStackConfig
 from edgestack.evaluation.verdicts import VerdictInputs, classify_verdict
 from edgestack.models import (
@@ -753,7 +757,9 @@ def _trial_cost_context(
             value not in {"equity", "etf"} for value in asset_type
         ):
             raise ValueError("trial asset types must contain only equity/etf")
-    raw_adv = np.asarray(getattr(trial, "adv_dollars", 100_000_000.0), dtype=float)
+    raw_adv = np.asarray(
+        getattr(trial, "adv_dollars", DEFAULT_ADV_FALLBACK_DOLLARS), dtype=float
+    )
     if raw_adv.ndim == 0:
         adv_dollars: float | np.ndarray[Any, np.dtype[np.float64]] = float(raw_adv)
     else:

@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from edgestack.mobile.models import (
     AlignmentLayer,
+    AnchorLeg,
     ApiMeta,
     AuditItem,
     EntryInstruction,
@@ -23,6 +24,9 @@ from edgestack.mobile.models import (
     MobileSnapshot,
     PortfolioSummary,
     SniperPolicy,
+    TailwindDay,
+    TimingAdvisor,
+    TimingAnchors,
 )
 from edgestack.provenance import sha256_file
 
@@ -69,7 +73,12 @@ class MobileSnapshotService:
         if signal.get("bias_tier") not in {"SURVIVORSHIP_BIASED", "POINT_IN_TIME"}:
             raise SnapshotUnavailableError("signal lacks an explicit bias tier")
         return self._normalize(
-            campaign.name, holdout_path, holdout, signal_path, signal
+            campaign.name,
+            holdout_path,
+            holdout,
+            signal_path,
+            signal,
+            timing=_timing_advisor(self.artifact_root),
         )
 
     def _campaign_directory(self) -> Path:
@@ -109,6 +118,8 @@ class MobileSnapshotService:
         holdout: dict[str, Any],
         signal_path: Path,
         signal: dict[str, Any],
+        *,
+        timing: TimingAdvisor,
     ) -> MobileSnapshot:
         candidates = cast(list[dict[str, Any]], signal.get("candidates", []))
         if not candidates:
@@ -193,6 +204,7 @@ class MobileSnapshotService:
             horizons=_horizon_plans(recommendations, entry, exit_),
             sniper=_sniper_policy(recommendations),
             loss_aware_v2=_free_only_v2(),
+            timing=timing,
         )
 
 
@@ -326,6 +338,89 @@ def _free_only_v2() -> LossAwareV2Summary:
         enabled_event_vetoes=(),
         timing="NO TRADE; monthly/yearly timing unlocks only after forward evidence and all gates pass.",
     )
+
+
+_MOBILE_CALENDAR_ROWS = 21
+
+
+def _timing_advisor(artifact_root: Path) -> TimingAdvisor:
+    """Load the persisted tailwind-calendar artifact, failing to UNAVAILABLE.
+
+    The artifact is written by ``edgestack tailwind-calendar --output
+    artifacts/advisor/tailwind-calendar.json``; a missing or malformed file
+    yields an explicit DATA_UNAVAILABLE section rather than an error, because
+    the timing advisor is diagnostic context, never gate evidence.
+    """
+
+    path = artifact_root / "advisor" / "tailwind-calendar.json"
+    unavailable = TimingAdvisor(
+        status="DATA_UNAVAILABLE",
+        symbol="NONE",
+        as_of_session="",
+        policy=(
+            "no advisor calendar artifact; generate one with "
+            "'edgestack tailwind-calendar --symbol SPY --output "
+            "artifacts/advisor/tailwind-calendar.json'"
+        ),
+    )
+    if not path.is_file():
+        return unavailable
+    try:
+        payload = _mapping(path)
+        anchors_raw = cast(dict[str, Any], payload.get("anchors", {}))
+        anchors: TimingAnchors | None = None
+        if anchors_raw.get("status") == "TWO_ANCHORS_ONLY":
+            legs = cast(dict[str, Any], anchors_raw.get("legs", {}))
+
+            def leg(name: str) -> AnchorLeg:
+                data = cast(dict[str, Any], legs.get(name, {}))
+                mean = data.get("mean_daily")
+                return AnchorLeg(
+                    n=int(data.get("n", 0)),
+                    mean_daily_bp=(
+                        float(mean) * 10_000.0 if mean is not None else None
+                    ),
+                    hit_rate=(
+                        float(data["hit_rate"])
+                        if data.get("hit_rate") is not None
+                        else None
+                    ),
+                )
+
+            anchors = TimingAnchors(
+                status="TWO_ANCHORS_ONLY",
+                best_buy_anchor=str(anchors_raw["best_buy_anchor"]),
+                matching_sell_anchor=str(anchors_raw["matching_sell_anchor"]),
+                overnight=leg("overnight"),
+                intraday=leg("intraday"),
+                finer_granularity=str(anchors_raw["fifteen_minute_calendar"]),
+            )
+        rows = tuple(
+            TailwindDay(
+                session=str(row["session"]),
+                weekday=str(row["weekday"]),
+                win_score=int(row["win_score_0_100"]),
+                expected_daily_bp=float(row["expected_daily_bp"]),
+                conditions=tuple(
+                    str(item) for item in row["active_calendar_conditions"]
+                ),
+            )
+            for row in cast(
+                list[dict[str, Any]], payload.get("calendar", [])
+            )[:_MOBILE_CALENDAR_ROWS]
+        )
+        if not rows:
+            return unavailable
+        return TimingAdvisor(
+            status="AVAILABLE",
+            symbol=str(payload["symbol"]),
+            as_of_session=str(payload["as_of_session"]),
+            policy=str(payload["policy"]),
+            anchors=anchors,
+            calendar=rows,
+        )
+    except (KeyError, TypeError, ValueError, SnapshotUnavailableError):
+        return unavailable
 
 
 def _mapping(path: Path) -> dict[str, Any]:

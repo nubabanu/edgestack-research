@@ -109,6 +109,84 @@ The exact resolved configuration is part of a campaign identity, so pass the sam
 `--config` file to every command. The final holdout command is intentionally
 one-use: inspect the provisional report before invoking it.
 
+### Versioned rigor upgrades (opt-in, never retroactive)
+
+`configs/full-literature-v2.yaml` is the recommended template for NEW
+campaigns. It binds four opt-in upgrades; existing frozen campaigns and sealed
+holdouts are untouched because every upgrade is a new version literal that old
+configs never select:
+
+- `holdout_gate.evaluator_version: CI_V2` — the final holdout gate requires
+  the stationary-bootstrap CI **lower bound** of every edge and the composite
+  to be strictly positive (the original `SIGN_V1` gate only checked the sign
+  of the mean). The version is bound into the freeze manifest at score time,
+  and `CI_V2` results carry report-only trend/volatility regime
+  stratification of the holdout streams.
+- `stats.survivor_causality_checks` (default on) — every discovery survivor
+  must reproduce its signal exactly when all future sessions are truncated
+  away (leak detection) and may not IMPROVE its HAC t under an extra
+  execution lag (timing-artifact detection).
+- `grid.extended_families` — declares quarter-end/month-end flow windows,
+  Amihud illiquidity, MAX-lottery, the overnight/intraday clientele gap, and
+  ETF-vs-market relative reversal through the same placebo/DSR/SPA/
+  Romano–Wolf gauntlet, honestly expanding the declared trial count.
+- `costs.spread_source: MEASURED_HL_FLOOR_V2` (and the same knob on the
+  reversal study) — per-name monthly Corwin–Schultz/Abdi–Ranaldo spread
+  estimates, floored at the assumed baseline so measurement can only make
+  results harder to pass.
+
+Report-only diagnostics that never touch sealed evidence:
+
+```powershell
+edgestack holdout-diagnostic --campaign <id>        # would the sealed result pass CI_V2?
+edgestack universe-pit-audit --config configs/full.yaml   # delisted-name price coverage
+edgestack universe-bias-delta --campaign <id>       # measured survivorship inflation
+python -m edgestack.edges.reversal_edge cpcv-diagnostic   # selected-rule PBO in its 30-rule grid
+```
+
+With `data.universe_pit: true`, ingest reconstructs `PIT_APPROXIMATION`
+membership from the Wikipedia change log and pulls delisted-name history from
+the hash-pinned Stooq bulk archive; names without recoverable history become
+reported coverage gaps instead of campaign failures, and the
+`SURVIVORSHIP_BIASED` watermark is retained (the approximation is measured by
+`universe-bias-delta`, not waved away). Ingest QA additionally cross-checks
+Yahoo's corporate-action ledger against the second provider's closes on action
+sessions: consistent evidence upgrades the watermark to
+`ACTIONS_CROSS_CHECKED`, contradictions quarantine the symbol, and
+indistinguishable events keep `SINGLE_SOURCE_ACTIONS`.
+
+### Instrument advisor (diagnostic)
+
+`edgestack advise --symbol GLD` builds a per-instrument timing report from
+daily bars (free-chain fetch, or `--bars` for an offline parquet):
+
+- **Tailwinds and headwinds** across week (weekday), month (turn-of-month,
+  month-end, quarter-end), year (month-of-year), event (holiday/opex), and
+  instrument state (trend vs MA200, 12-1 momentum, prior-week reversal, vol
+  tercile) — every condition reporting its dark side: behavior in the
+  opposite trend regime, worst session, and in-condition drawdown, so a
+  positive edge's losses and a negative edge's wins always reach the rating.
+- **Combinations with multiplicity control**: cross-kind pairs are evaluated
+  as gating candidates, every pair counts toward one Bonferroni family, and a
+  pair is only an `INCREMENTAL_CANDIDATE` when the joint mean beats BOTH
+  components (pairwise ablation) with enough joint observations; mask overlap
+  exposes correlated-voter redundancy.
+- **Best/worst buy-sell windows** for the week, month, and year, plus an
+  **alignment scan** of upcoming sessions ("all stars aligned" and the worst
+  sessions). `--buy-date` rates one intended session with active tailwinds/
+  headwinds, an overall rating, and an if-you-trade-anyway caution list.
+- **Hard honesty limits**: daily bars support only the opening/closing
+  auctions as execution anchors (no intra-hour claims); news is
+  `DATA_UNAVAILABLE` (no licensed feed); the whole report is stamped
+  `DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER` — the campaign gauntlet
+  remains the only promotion path.
+
+The statistically proper combination path also exists inside the gauntlet:
+with `grid.extended_families: true`, campaigns declare calendar-gated
+momentum/reversal candidates (e.g. "momentum only when the first earned
+session is a Friday/turn-of-month/month-end/quarter-end session") as sixteen
+additional preregistered trials with their own placebo controls.
+
 ### Loss-aware Research V2
 
 `loss-aware-v2` is a new paper-only namespace. It never reads, modifies, or

@@ -96,6 +96,17 @@ evidence or display it as a network-validated promoted snapshot.
   five-session basket appears under Week with entry/review/exit and cancellation
   rules. Month and Year fail closed as `DATA_UNAVAILABLE` and cannot emit a
   ticker until their own model, freeze, and future holdout exist.
+- **Timing** shows the diagnostic tailwind calendar published by the server
+  (`edgestack tailwind-calendar --symbol SPY --output
+  artifacts/advisor/tailwind-calendar.json`): per-session win scores
+  (reliability-weighted historical hit rates, never success probabilities),
+  expected basis points, active calendar conditions, and the two measurable
+  execution anchors (opening/closing auction) with their overnight/intraday
+  legs. Hourly and 15-minute granularity are labeled `DATA_UNAVAILABLE`
+  because daily bars hold no intraday prices. The whole tab carries a
+  `DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER` watermark and is
+  subordinate to the validated basket; when the server has no advisor
+  artifact the tab fails closed to `DATA_UNAVAILABLE`.
 - **Evidence** replays holdout coverage, mean returns, terminal wealth, hashes,
   and audit events. It cannot trigger a recomputation.
 - **Setup** selects demo/network mode and an endpoint. Bearer tokens are held in

@@ -143,6 +143,43 @@ data class LossAwareV2Summary(
 )
 
 @Serializable
+data class AnchorLeg(
+    val n: Int,
+    @SerialName("mean_daily_bp") val meanDailyBp: Double? = null,
+    @SerialName("hit_rate") val hitRate: Double? = null,
+)
+
+@Serializable
+data class TimingAnchors(
+    val status: String,
+    @SerialName("best_buy_anchor") val bestBuyAnchor: String,
+    @SerialName("matching_sell_anchor") val matchingSellAnchor: String,
+    val overnight: AnchorLeg? = null,
+    val intraday: AnchorLeg? = null,
+    @SerialName("finer_granularity") val finerGranularity: String,
+)
+
+@Serializable
+data class TailwindDay(
+    val session: String,
+    val weekday: String,
+    @SerialName("win_score") val winScore: Int,
+    @SerialName("expected_daily_bp") val expectedDailyBp: Double,
+    val conditions: List<String>,
+)
+
+@Serializable
+data class TimingAdvisor(
+    val status: String,
+    val symbol: String,
+    @SerialName("as_of_session") val asOfSession: String,
+    val policy: String,
+    val anchors: TimingAnchors? = null,
+    val calendar: List<TailwindDay> = emptyList(),
+    @SerialName("diagnostic_watermark") val diagnosticWatermark: String,
+)
+
+@Serializable
 data class MobileSnapshot(
     val meta: ApiMeta,
     @SerialName("campaign_id") val campaignId: String,
@@ -160,10 +197,11 @@ data class MobileSnapshot(
     val horizons: List<HorizonPlan>,
     val sniper: SniperPolicy,
     @SerialName("loss_aware_v2") val lossAwareV2: LossAwareV2Summary,
+    val timing: TimingAdvisor,
     val disclaimer: String,
 ) {
     fun validate(): MobileSnapshot {
-        require(meta.schemaVersion == "1.3") { "Unsupported mobile schema" }
+        require(meta.schemaVersion == "1.4") { "Unsupported mobile schema" }
         require(recommendations.map { it.rank } == (1..recommendations.size).toList()) {
             "Recommendation ranks are incomplete or reordered"
         }
@@ -212,6 +250,15 @@ data class MobileSnapshot(
             lossAwareV2.selectedHorizon == "NONE" ||
                 lossAwareV2.lossMetrics.status == "AVAILABLE",
         ) { "V2 selection requires loss evidence" }
+        require(timing.status != "AVAILABLE" || timing.calendar.isNotEmpty()) {
+            "An available timing advisor requires calendar rows"
+        }
+        require(timing.status != "DATA_UNAVAILABLE" || timing.calendar.isEmpty()) {
+            "An unavailable timing advisor cannot emit a calendar"
+        }
+        require(timing.calendar.all { it.winScore in 0..100 }) {
+            "Timing win scores must lie in 0..100"
+        }
         return this
     }
 }

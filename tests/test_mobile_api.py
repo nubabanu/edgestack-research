@@ -59,7 +59,7 @@ def test_mobile_api_requires_constant_bearer_and_sets_evidence_headers(
     assert response.status_code == 200
     assert response.headers["etag"].startswith('"')
     assert response.headers["cache-control"] == "private, no-cache"
-    assert response.json()["meta"]["schema_version"] == "1.3"
+    assert response.json()["meta"]["schema_version"] == "1.4"
     assert "/orders" not in client.app.openapi()["paths"]
 
 
@@ -173,6 +173,50 @@ def test_sealed_campaign_artifacts_are_verified_and_normalized(tmp_path: Path) -
     assert snapshot.recommendations[0].symbol == "TEST"
     assert snapshot.horizons[0].symbols == ("TEST",)
     assert snapshot.horizons[1].recommendation_scope == "NONE"
+    # No advisor calendar artifact exists, so the timing section fails to
+    # DATA_UNAVAILABLE instead of failing the snapshot.
+    assert snapshot.timing.status == "DATA_UNAVAILABLE"
+    assert snapshot.timing.calendar == ()
+
+    advisor_dir = tmp_path / "advisor"
+    advisor_dir.mkdir()
+    (advisor_dir / "tailwind-calendar.json").write_text(
+        json.dumps(
+            {
+                "symbol": "SPY",
+                "as_of_session": "2026-01-02",
+                "policy": "reliability-weighted",
+                "anchors": {
+                    "status": "TWO_ANCHORS_ONLY",
+                    "best_buy_anchor": "CLOSE_AUCTION",
+                    "matching_sell_anchor": "next OPEN_AUCTION",
+                    "legs": {
+                        "overnight": {"n": 5000, "mean_daily": 0.00032, "hit_rate": 0.55},
+                        "intraday": {"n": 5000, "mean_daily": 0.00018, "hit_rate": 0.54},
+                    },
+                    "fifteen_minute_calendar": "DATA_UNAVAILABLE",
+                },
+                "calendar": [
+                    {
+                        "session": "2026-01-05",
+                        "weekday": "MON",
+                        "win_score_0_100": 56,
+                        "expected_daily_bp": 2.5,
+                        "active_calendar_conditions": ["weekday=MON"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    refreshed = MobileSnapshotService(tmp_path, campaign_id="sealed-001").load()
+    assert refreshed.timing.status == "AVAILABLE"
+    assert refreshed.timing.symbol == "SPY"
+    assert refreshed.timing.calendar[0].win_score == 56
+    assert refreshed.timing.anchors is not None
+    assert refreshed.timing.anchors.overnight is not None
+    assert refreshed.timing.anchors.overnight.mean_daily_bp == pytest.approx(3.2)
+    assert "NOT_AN_ORDER" in refreshed.timing.diagnostic_watermark
 
 
 def test_unavailable_horizon_cannot_emit_a_stock(tmp_path: Path) -> None:

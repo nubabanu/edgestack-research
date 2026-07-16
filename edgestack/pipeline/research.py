@@ -13,7 +13,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from edgestack.backtest.costs import CostModel
+from edgestack.backtest.costs import DEFAULT_ADV_FALLBACK_DOLLARS, CostModel
 from edgestack.backtest.engine import (
     BacktestResult,
     close_derived_execution_lag,
@@ -24,14 +24,24 @@ from edgestack.backtest.metrics import performance_metrics
 from edgestack.config import EdgeStackConfig
 from edgestack.data.calendars import NYSECalendar
 from edgestack.features.calendar_feats import calendar_features
-from edgestack.features.cross_sectional import canonical_features, decile_weights
+from edgestack.features.cross_sectional import (
+    amihud_illiquidity,
+    canonical_features,
+    decile_weights,
+    max_lottery,
+    overnight_intraday_gap,
+    short_term_reversal,
+)
 from edgestack.hypotheses.controls import (
     control_specs,
     matched_random_signal,
     shuffled_date_returns,
 )
 from edgestack.hypotheses.grid import (
+    DEFAULT_PREDICATES,
+    EXTENDED_PREDICATES,
     GridConfig,
+    conditional_combination_hypotheses,
     cross_sectional_hypotheses,
     enumerate_hypotheses,
 )
@@ -314,7 +324,11 @@ def declared_hypotheses(
             }
         )
     )
+    predicate_levels = dict(DEFAULT_PREDICATES)
+    if config.grid.extended_families:
+        predicate_levels.update(EXTENDED_PREDICATES)
     grid = GridConfig(
+        predicate_levels=predicate_levels,
         sectors=sectors,
         holding_periods=config.grid.close_holding_periods,
         directions=tuple(Direction(value) for value in config.grid.directions),
@@ -324,7 +338,11 @@ def declared_hypotheses(
     )
     specs: list[HypothesisSpec] = enumerate_hypotheses(grid)
     if config.grid.include_cross_sectional:
-        specs.extend(cross_sectional_hypotheses())
+        specs.extend(
+            cross_sectional_hypotheses(extended=config.grid.extended_families)
+        )
+        if config.grid.extended_families:
+            specs.extend(conditional_combination_hypotheses())
     return tuple(specs)
 
 
@@ -353,7 +371,7 @@ def run_trial(
             .mean()
             .mean(axis=1)
             .shift(1)
-            .fillna(100_000_000.0)
+            .fillna(DEFAULT_ADV_FALLBACK_DOLLARS)
             .to_numpy(float)
         )
         selected_types = {
@@ -372,7 +390,9 @@ def run_trial(
             .shift(1)
         )
         adv = np.nan_to_num(
-            adv_frame.to_numpy(dtype=float), nan=100_000_000.0, posinf=100_000_000.0
+            adv_frame.to_numpy(dtype=float),
+            nan=DEFAULT_ADV_FALLBACK_DOLLARS,
+            posinf=DEFAULT_ADV_FALLBACK_DOLLARS,
         )
         asset_type = prepared.asset_types
     benchmark_returns = _spy_benchmark_returns(prepared, spec)
@@ -414,6 +434,108 @@ def run_trial(
         benchmark_returns,
         execution_lag,
     )
+
+
+# A surviving trial whose HAC t improves by more than this margin when an
+# EXTRA execution lag is inserted is flagged: honest slow signals keep or lose
+# strength under delay, while material improvement suggests a timing artifact.
+_EXTRA_LAG_T_INFLATION_MARGIN = 1.0
+
+
+def _truncated_prepared(prepared: PreparedResearch, length: int) -> PreparedResearch:
+    """Return the identical research panel with every date past ``length`` removed."""
+
+    return PreparedResearch(
+        dates=prepared.dates[:length],
+        close=prepared.close.iloc[:length],
+        open=prepared.open.iloc[:length],
+        high=prepared.high.iloc[:length],
+        low=prepared.low.iloc[:length],
+        volume=prepared.volume.iloc[:length],
+        close_returns=prepared.close_returns.iloc[:length],
+        overnight_returns=prepared.overnight_returns.iloc[:length],
+        intraday_returns=prepared.intraday_returns.iloc[:length],
+        calendar=prepared.calendar.iloc[:length],
+        sector_by_symbol=prepared.sector_by_symbol,
+        asset_types=prepared.asset_types,
+        market_open=prepared.market_open[:length],
+        market_close=prepared.market_close[:length],
+    )
+
+
+def _survivor_causality_evidence(
+    prepared: PreparedResearch,
+    trial: TrialRun,
+    *,
+    cost_model: CostModel,
+) -> dict[str, Any]:
+    """Run per-survivor causality invariants on one discovery survivor.
+
+    Hard gate: recomputing the signal with all future sessions removed must
+    not change any value before the truncation boundary (a buffer of sessions
+    below the boundary is exempt because holding windows and month-boundary
+    calendar predicates legitimately need forward sessions to complete).
+    Soft gate: an extra execution lag may not materially IMPROVE the HAC t;
+    losing strength under delay is expected and never gates.
+    """
+
+    spec = trial.spec
+    holding = int(spec.holding_period) if isinstance(spec.holding_period, int) else 1
+    buffer = max(25, holding + trial.execution_lag + 5)
+    total = len(prepared.dates)
+    prefix_length = total - buffer
+    if prefix_length < 2 * buffer:
+        return {
+            "causality_prefix_invariant": True,
+            "causality_baseline_t": trial.result.return_statistics.hac_t_stat,
+            "causality_extra_lag_t": math.nan,
+            "causality_lag_inflation": False,
+            "causality_pass": True,
+            "causality_reason": "SAMPLE_TOO_SHORT_TO_TEST",
+        }
+    truncated_trial = run_trial(
+        _truncated_prepared(prepared, prefix_length), spec, cost_model=cost_model
+    )
+    boundary = prefix_length - buffer
+    prefix_invariant = bool(
+        np.allclose(
+            np.asarray(trial.signal, dtype=float)[:boundary],
+            np.asarray(truncated_trial.signal, dtype=float)[:boundary],
+            equal_nan=True,
+        )
+    )
+    _, extra_lag_net, _ = vectorized_backtest(
+        trial.signal,
+        trial.underlying_returns,
+        execution_lag=trial.execution_lag + 1,
+        cost_model=cost_model,
+        asset_type=trial.asset_type,
+        adv_dollars=trial.adv_dollars,
+    )
+    baseline_t = trial.result.return_statistics.hac_t_stat
+    extra_lag_t = summarize_returns(
+        extra_lag_net, holding_period=holding, minimum_observations=100
+    ).hac_t_stat
+    lag_inflation = bool(
+        math.isfinite(baseline_t)
+        and math.isfinite(extra_lag_t)
+        and extra_lag_t > baseline_t + _EXTRA_LAG_T_INFLATION_MARGIN
+    )
+    passed = prefix_invariant and not lag_inflation
+    if not prefix_invariant:
+        reason = "SIGNAL_CHANGED_WHEN_FUTURE_SESSIONS_REMOVED"
+    elif lag_inflation:
+        reason = "HAC_T_IMPROVED_UNDER_EXTRA_EXECUTION_LAG"
+    else:
+        reason = "PASSED"
+    return {
+        "causality_prefix_invariant": prefix_invariant,
+        "causality_baseline_t": baseline_t,
+        "causality_extra_lag_t": extra_lag_t,
+        "causality_lag_inflation": lag_inflation,
+        "causality_pass": passed,
+        "causality_reason": reason,
+    }
 
 
 def run_discovery(
@@ -579,7 +701,10 @@ def run_discovery(
         finally:
             _close_memmap(real_matrix)
 
-        family_pass = family.spa < 0.05 and family.reality_check < 0.05
+        family_pass = (
+            family.spa < config.stats.family_alpha
+            and family.reality_check < config.stats.family_alpha
+        )
         real_mask = metrics["placebo_kind"].isna().to_numpy()
         romano_wolf_adjusted = np.ones(len(metrics), dtype=float)
         romano_wolf_pass = np.ones(len(metrics), dtype=bool)
@@ -661,14 +786,48 @@ def run_discovery(
         )
         survivor_net: dict[str, np.ndarray[Any, np.dtype[np.float64]]] = {}
         survivor_gross: dict[str, np.ndarray[Any, np.dtype[np.float64]]] = {}
+        causality_rows: dict[str, dict[str, Any]] = {}
+        causality_rejected: set[str] = set()
         for hypothesis_id in survivors:
             trial = run_trial(
                 prepared,
                 real_by_id[hypothesis_id],
                 cost_model=cost_model,
             )
+            if config.stats.survivor_causality_checks and isinstance(
+                prepared, PreparedResearch
+            ):
+                evidence = _survivor_causality_evidence(
+                    prepared, trial, cost_model=cost_model
+                )
+                causality_rows[hypothesis_id] = evidence
+                if not evidence["causality_pass"]:
+                    causality_rejected.add(hypothesis_id)
+                    continue
             survivor_net[hypothesis_id] = trial.result.net_returns
             survivor_gross[hypothesis_id] = trial.result.gross_returns
+        if causality_rows:
+            for column in (
+                "causality_prefix_invariant",
+                "causality_baseline_t",
+                "causality_extra_lag_t",
+                "causality_lag_inflation",
+                "causality_pass",
+                "causality_reason",
+            ):
+                metrics[column] = metrics["hypothesis_id"].map(
+                    {key: row[column] for key, row in causality_rows.items()}
+                )
+        if causality_rejected:
+            metrics.loc[
+                metrics["hypothesis_id"].isin(causality_rejected),
+                "discovery_survivor",
+            ] = False
+            survivors = tuple(
+                hypothesis_id
+                for hypothesis_id in survivors
+                if hypothesis_id not in causality_rejected
+            )
         net_streams = pd.DataFrame(survivor_net, index=prepared.dates)
         gross_streams = pd.DataFrame(survivor_gross, index=prepared.dates)
         _emit_progress(
@@ -1247,9 +1406,29 @@ def _calendar_trial_inputs(
         returns = (
             returns_frame.loc[:, symbols].mean(axis=1, skipna=True).to_numpy(float)
         )
+    mask = _calendar_predicate_mask(prepared, spec.predicates)
+    holding = int(spec.holding_period) if isinstance(spec.holding_period, int) else 1
+    # Calendar predicates describe the return's target session. The centralized
+    # engine still applies its mandatory one-bar execution lag, so map the known-
+    # in-advance target position back to the preceding decision row. This makes a
+    # Monday predicate earn Monday's return rather than Tuesday's.
+    target_position = np.convolve(mask.astype(float), np.ones(holding), mode="full")[
+        : len(mask)
+    ]
+    direction = 1.0 if spec.direction is Direction.LONG else -1.0
+    signal = np.zeros(len(mask), dtype=float)
+    signal[:-1] = np.clip(target_position[1:], 0.0, 1.0) * direction
+    return signal.astype(float), returns.astype(float)
+
+
+def _calendar_predicate_mask(
+    prepared: PreparedResearch, predicates: Mapping[str, str]
+) -> np.ndarray[Any, np.dtype[np.bool_]]:
+    """Return the session mask selected by the declared calendar predicates."""
+
     mask = np.ones(len(prepared.dates), dtype=bool)
     weekday_names = {"MON": 0, "TUE": 1, "WED": 2, "THU": 3, "FRI": 4}
-    for family, value in spec.predicates.items():
+    for family, value in predicates.items():
         if family == "sector":
             continue
         if family == "weekday":
@@ -1271,21 +1450,13 @@ def _calendar_trial_inputs(
             selected = prepared.calendar[column].to_numpy(dtype=bool)
         elif family == "opex":
             selected = prepared.calendar["opex_week"].to_numpy(dtype=bool)
+        elif family in {"quarter_end", "month_end"}:
+            flag = prepared.calendar[f"{family}_window"].to_numpy(dtype=bool)
+            selected = flag if value == "WINDOW" else ~flag
         else:
             raise ValueError(f"unsupported predicate family {family}")
         mask &= selected
-    holding = int(spec.holding_period) if isinstance(spec.holding_period, int) else 1
-    # Calendar predicates describe the return's target session. The centralized
-    # engine still applies its mandatory one-bar execution lag, so map the known-
-    # in-advance target position back to the preceding decision row. This makes a
-    # Monday predicate earn Monday's return rather than Tuesday's.
-    target_position = np.convolve(mask.astype(float), np.ones(holding), mode="full")[
-        : len(mask)
-    ]
-    direction = 1.0 if spec.direction is Direction.LONG else -1.0
-    signal = np.zeros(len(mask), dtype=float)
-    signal[:-1] = np.clip(target_position[1:], 0.0, 1.0) * direction
-    return signal.astype(float), returns.astype(float)
+    return mask
 
 
 def _spy_benchmark_returns(
@@ -1308,22 +1479,96 @@ def _spy_benchmark_returns(
     return frame.loc[:, spy_column].to_numpy(dtype=float)
 
 
+def _cross_sectional_feature(
+    prepared: PreparedResearch, spec: HypothesisSpec
+) -> pd.DataFrame:
+    """Return the declared feature panel for one cross-sectional family.
+
+    Extended families draw on volume and open prices; the ETF relative family
+    is scored only on ETF columns so equities never enter its ranks.
+    """
+
+    if spec.family in {
+        "momentum_12_1",
+        "reversal_5d",
+        "low_volatility",
+        "high_52w_proximity",
+    }:
+        features = canonical_features(prepared.close)
+        return {
+            "momentum_12_1": features.momentum,
+            "reversal_5d": features.reversal,
+            "low_volatility": features.low_volatility,
+            "high_52w_proximity": features.high_proximity,
+        }[spec.family]
+    if spec.family == "amihud_illiquidity":
+        return amihud_illiquidity(
+            prepared.close,
+            prepared.volume,
+            window=int(spec.parameters["window"]),
+        )
+    if spec.family == "max_lottery":
+        return max_lottery(prepared.close, window=int(spec.parameters["window"]))
+    if spec.family == "overnight_intraday_gap":
+        return overnight_intraday_gap(
+            prepared.open,
+            prepared.close,
+            window=int(spec.parameters["window"]),
+        )
+    if spec.family == "etf_relative_reversal":
+        etf_columns = [
+            column
+            for column, asset_type in zip(
+                prepared.close.columns, prepared.asset_types, strict=True
+            )
+            if asset_type == "etf"
+        ]
+        if not etf_columns:
+            raise ValueError("etf_relative_reversal requires ETF columns")
+        feature = short_term_reversal(
+            prepared.close.loc[:, etf_columns],
+            lookback=int(spec.parameters["lookback"]),
+        )
+        return feature.reindex(columns=prepared.close.columns)
+    raise ValueError(f"unsupported cross-sectional family {spec.family}")
+
+
 def _cross_sectional_trial_inputs(
     prepared: PreparedResearch, spec: HypothesisSpec
 ) -> tuple[
     np.ndarray[Any, np.dtype[np.float64]], np.ndarray[Any, np.dtype[np.float64]]
 ]:
-    features = canonical_features(prepared.close)
-    feature = {
-        "momentum_12_1": features.momentum,
-        "reversal_5d": features.reversal,
-        "low_volatility": features.low_volatility,
-        "high_52w_proximity": features.high_proximity,
-    }.get(spec.family)
-    if feature is None:
-        raise ValueError(f"unsupported cross-sectional family {spec.family}")
+    feature = _cross_sectional_feature(prepared, spec)
     weights = decile_weights(feature)
-    if spec.family == "momentum_12_1":
+    gate_predicates = {
+        key: value for key, value in spec.predicates.items() if key != "sector"
+    }
+    if gate_predicates:
+        # Conditional combination candidate: the ranked entry is allowed only
+        # when its FIRST earned session satisfies the declared calendar gate.
+        # The exchange calendar is known in advance, so gating a decision row
+        # by its own future fill session is causal. Gated candidates always
+        # use the overlapping-cohort convention so the gate cannot silently
+        # extend a holding period.
+        gate = pd.Series(
+            _calendar_predicate_mask(prepared, gate_predicates),
+            index=weights.index,
+        )
+        entry_gate = gate.shift(
+            -close_derived_execution_lag(spec.session), fill_value=False
+        )
+        weights = weights.where(entry_gate, 0.0)
+        holding = (
+            int(spec.holding_period) if isinstance(spec.holding_period, int) else 1
+        )
+        weights = pd.DataFrame(
+            overlapping_cohort_targets(
+                weights.to_numpy(dtype=float), holding_period=holding
+            ),
+            index=weights.index,
+            columns=weights.columns,
+        )
+    elif spec.family == "momentum_12_1":
         periods = pd.Series(prepared.dates.to_period("M"), index=prepared.dates)
         rebalance = periods.ne(periods.shift(1))
         weights = weights.where(rebalance, np.nan).ffill().fillna(0.0)

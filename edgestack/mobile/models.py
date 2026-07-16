@@ -19,7 +19,7 @@ class WireModel(BaseModel):
 class ApiMeta(WireModel):
     """Version and freshness metadata for one atomic snapshot."""
 
-    schema_version: Literal["1.3"] = "1.3"
+    schema_version: Literal["1.4"] = "1.4"
     generated_at: datetime
     market_as_of: str
     source: str
@@ -164,6 +164,50 @@ class LossAwareV2Summary(WireModel):
     timing: str
 
 
+class AnchorLeg(WireModel):
+    """One measurable auction-to-auction return leg."""
+
+    n: int = Field(ge=0)
+    mean_daily_bp: float | None = None
+    hit_rate: float | None = Field(default=None, ge=0, le=1)
+
+
+class TimingAnchors(WireModel):
+    """The only hour-level guidance daily bars can honestly support."""
+
+    status: Literal["TWO_ANCHORS_ONLY", "DATA_UNAVAILABLE"]
+    best_buy_anchor: str
+    matching_sell_anchor: str
+    overnight: AnchorLeg | None = None
+    intraday: AnchorLeg | None = None
+    finer_granularity: str
+
+
+class TailwindDay(WireModel):
+    """One upcoming session's diagnostic alignment evidence."""
+
+    session: str
+    weekday: str
+    win_score: int = Field(ge=0, le=100)
+    expected_daily_bp: float
+    conditions: tuple[str, ...]
+
+
+class TimingAdvisor(WireModel):
+    """Diagnostic tailwind calendar; never a validated edge or an order."""
+
+    status: Literal["AVAILABLE", "DATA_UNAVAILABLE"]
+    symbol: str
+    as_of_session: str
+    policy: str
+    anchors: TimingAnchors | None = None
+    calendar: tuple[TailwindDay, ...] = ()
+    diagnostic_watermark: str = (
+        "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER: win scores are "
+        "reliability-weighted historical hit rates, not success probabilities"
+    )
+
+
 class MobileSnapshot(WireModel):
     """Atomic Android home-screen payload."""
 
@@ -183,6 +227,7 @@ class MobileSnapshot(WireModel):
     horizons: tuple[HorizonPlan, ...]
     sniper: SniperPolicy
     loss_aware_v2: LossAwareV2Summary
+    timing: TimingAdvisor
     disclaimer: str = DISCLAIMER
 
     def model_post_init(self, __context: object) -> None:
@@ -241,3 +286,7 @@ class MobileSnapshot(WireModel):
             raise ValueError("V2 selection requires loss evidence")
         if self.loss_aware_v2.selected_leverage not in {1.0, 1.5, 2.0}:
             raise ValueError("V2 leverage must be a preregistered trial")
+        if self.timing.status == "AVAILABLE" and not self.timing.calendar:
+            raise ValueError("an available timing advisor requires calendar rows")
+        if self.timing.status == "DATA_UNAVAILABLE" and self.timing.calendar:
+            raise ValueError("an unavailable timing advisor cannot emit a calendar")

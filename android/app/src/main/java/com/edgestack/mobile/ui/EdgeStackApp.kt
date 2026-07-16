@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
@@ -75,6 +76,7 @@ private enum class AppTab(val label: String, val icon: ImageVector) {
     PLAN("Plan", Icons.AutoMirrored.Outlined.ShowChart),
     BASKET("Basket", Icons.Outlined.Assessment),
     HORIZONS("Sniper", Icons.Outlined.DateRange),
+    TIMING("Timing", Icons.Outlined.Schedule),
     EVIDENCE("Evidence", Icons.Outlined.Shield),
     SETUP("Setup", Icons.Outlined.Settings),
 }
@@ -160,6 +162,7 @@ private fun SnapshotContent(
         AppTab.PLAN -> PlanScreen(snapshot, state)
         AppTab.BASKET -> BasketScreen(snapshot)
         AppTab.HORIZONS -> HorizonsScreen(snapshot)
+        AppTab.TIMING -> TimingScreen(snapshot)
         AppTab.EVIDENCE -> EvidenceScreen(snapshot)
         AppTab.SETUP -> SetupScreen(state, viewModel)
     }
@@ -290,6 +293,84 @@ private fun HorizonCard(plan: HorizonPlan) {
                 plan.invalidation.forEach { Text("• $it", color = Fog) }
             }
             Text("Unlock: ${plan.unlockRequirement}", color = if (available) Mint else Coral)
+        }
+    }
+}
+
+@Composable
+private fun TimingScreen(snapshot: MobileSnapshot) {
+    val timing = snapshot.timing
+    BaseList(snapshot) {
+        item {
+            Text("Tailwind calendar", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text(
+                if (timing.status == "AVAILABLE") "${timing.symbol} · as of ${timing.asOfSession}"
+                else "No advisor calendar artifact on the server",
+                color = Fog,
+            )
+        }
+        item { Notice(timing.diagnosticWatermark, Gold) }
+        if (timing.status != "AVAILABLE") {
+            item { Notice("DATA UNAVAILABLE", Coral) }
+            item { SectionCard("How to enable") { Text(timing.policy, color = Fog) } }
+            return@BaseList
+        }
+        timing.anchors?.let { anchors ->
+            item {
+                SectionCard("Execution anchors · the only measurable hours") {
+                    KeyValue("Buy", anchors.bestBuyAnchor)
+                    KeyValue("Sell", anchors.matchingSellAnchor)
+                    HorizontalDivider(color = PanelSoft)
+                    anchors.overnight?.let { leg ->
+                        KeyValue(
+                            "Overnight leg",
+                            "${leg.meanDailyBp?.format(2) ?: "—"} bp · hit ${leg.hitRate?.let { percent(it) } ?: "—"}",
+                        )
+                    }
+                    anchors.intraday?.let { leg ->
+                        KeyValue(
+                            "Intraday leg",
+                            "${leg.meanDailyBp?.format(2) ?: "—"} bp · hit ${leg.hitRate?.let { percent(it) } ?: "—"}",
+                        )
+                    }
+                    Text(anchors.finerGranularity, color = Coral, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        item { SectionCard("Scoring policy") { Text(timing.policy, color = Fog, style = MaterialTheme.typography.bodySmall) } }
+        items(timing.calendar, key = { it.session }) { day ->
+            TailwindDayCard(day)
+        }
+    }
+}
+
+@Composable
+private fun TailwindDayCard(day: com.edgestack.mobile.data.TailwindDay) {
+    val favorable = day.expectedDailyBp >= 0
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(day.session, fontWeight = FontWeight.Black)
+                    Text(day.weekday, color = Fog, style = MaterialTheme.typography.labelMedium)
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        "${day.winScore}",
+                        color = if (favorable) Mint else Coral,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 24.sp,
+                    )
+                    Text("win score", style = MaterialTheme.typography.labelSmall, color = Fog)
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MiniMetric("Expected", "${day.expectedDailyBp.format(1)} bp", if (favorable) Mint else Coral)
+                MiniMetric(
+                    "Conditions",
+                    if (day.conditions.isEmpty()) "none" else day.conditions.joinToString(limit = 3) { it.substringAfter('=') },
+                )
+            }
         }
     }
 }

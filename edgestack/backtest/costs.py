@@ -16,6 +16,10 @@ import numpy as np
 
 from edgestack.stats._types import FloatArray
 
+# Optimistic liquidity assumed when ADV is unknown; keeps missing-data names
+# from silently escaping participation impact rather than modeling them well.
+DEFAULT_ADV_FALLBACK_DOLLARS = 100_000_000.0
+
 
 @dataclass(frozen=True, slots=True)
 class CostAssumptions:
@@ -158,15 +162,19 @@ class CostModel:
         *,
         asset_type: Literal["equity", "etf"] | Sequence[str] = "equity",
         order_dollars: float | None = None,
-        adv_dollars: float | FloatArray = 100_000_000.0,
+        adv_dollars: float | FloatArray = DEFAULT_ADV_FALLBACK_DOLLARS,
         short_borrow_days: float = 1.0,
         multiplier: float = 1.0,
+        full_spread_bps: FloatArray | None = None,
     ) -> FloatArray:
         """Return daily costs for lagged portfolio weights.
 
         Position changes are one-way turnover. Each changed dollar is one fill,
         so spread is charged at half the full spread and impact is scaled by the
         traded fraction. Short borrow is charged on maintained short exposure.
+        ``full_spread_bps`` optionally overrides the assumed per-instrument
+        spread with a measured per-date-per-name matrix; callers must floor
+        measured values at the baseline so measurement never lowers costs.
         """
 
         weights = np.asarray(positions, dtype=float)
@@ -214,6 +222,20 @@ class CostModel:
                 self.assumptions.etf_full_spread_bps,
                 self.assumptions.equity_full_spread_bps,
             )[None, :]
+        if full_spread_bps is not None:
+            measured = np.asarray(full_spread_bps, dtype=float)
+            if measured.shape != weights.shape:
+                raise ValueError(
+                    "full_spread_bps must align with the positions matrix"
+                )
+            if np.any(~np.isfinite(measured)) or np.any(
+                measured < np.asarray(full_spread, dtype=float)
+            ):
+                raise ValueError(
+                    "measured spreads must be finite and floored at the "
+                    "assumed baseline"
+                )
+            full_spread = measured
         participation = np.divide(
             trades * selected_order_dollars,
             liquidity,

@@ -253,6 +253,303 @@ def loss_aware_v2(
     )
 
 
+@app.command()
+def advise(
+    symbol: Annotated[str, typer.Option("--symbol", help="Ticker, e.g. GLD, USO.")],
+    years: Annotated[int, typer.Option("--years", min=2, max=60)] = 20,
+    buy_date: Annotated[
+        str | None,
+        typer.Option(
+            "--buy-date",
+            metavar="YYYY-MM-DD",
+            help="Rate this intended buy session against active conditions.",
+        ),
+    ] = None,
+    buy_hour: Annotated[
+        str | None,
+        typer.Option(
+            "--buy-hour",
+            metavar="HH:MM",
+            help="ET clock time to rate; only the auction anchors are "
+            "measurable (open ~09:30, close 15:45-16:00).",
+        ),
+    ] = None,
+    bars: Annotated[
+        Path | None,
+        typer.Option(
+            "--bars",
+            exists=True,
+            dir_okay=False,
+            help="Offline bars parquet (symbol/session/adjusted_close); "
+            "skips the network fetch.",
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Write the JSON report here."),
+    ] = None,
+) -> None:
+    """Diagnostic per-instrument timing report: tailwinds, headwinds, windows.
+
+    NOT a validated edge and NOT an order. Daily bars only: execution anchors
+    are the opening/closing auctions; news is DATA_UNAVAILABLE by design.
+    """
+
+    import asyncio
+    from datetime import date as date_type
+    from datetime import timedelta
+
+    import pandas as pd
+
+    from edgestack.advisor import advise as build_report
+
+    warnings: tuple[str, ...] = ()
+    if bars is not None:
+        frame = pd.read_parquet(bars)
+    else:
+        from edgestack.data.sources import (
+            FallbackDailyBarSource,
+            StooqDailyBarSource,
+            YahooDailyBarSource,
+            bars_to_frame,
+        )
+        from edgestack.models import AssetKey, BarRequest
+
+        async def _fetch() -> tuple[pd.DataFrame, tuple[str, ...]]:
+            chain = FallbackDailyBarSource(
+                (StooqDailyBarSource(), YahooDailyBarSource())
+            )
+            batch = await chain.fetch_bars(
+                BarRequest(
+                    AssetKey(symbol.upper()),
+                    date_type.today() - timedelta(days=365 * years),
+                    date_type.today(),
+                    adjusted=True,
+                )
+            )
+            return bars_to_frame(batch), tuple(batch.warnings)
+
+        frame, warnings = asyncio.run(_fetch())
+    report = build_report(
+        frame,
+        symbol=symbol.upper(),
+        buy_session=_parse_iso_date(buy_date, "--buy-date"),
+        buy_hour=buy_hour,
+        provenance_warnings=warnings,
+        root=Path.cwd(),
+    )
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(report, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        console.print(f"Advisor report written to [bold]{output}[/bold]")
+    console.print_json(data=report)
+
+
+@app.command("tailwind-calendar")
+def tailwind_calendar(
+    symbol: Annotated[str, typer.Option("--symbol", help="Ticker, e.g. SPY, QQQ, GLD, USO.")],
+    sessions: Annotated[int, typer.Option("--sessions", min=5, max=252)] = 63,
+    years: Annotated[int, typer.Option("--years", min=2, max=60)] = 20,
+    bars: Annotated[
+        Path | None,
+        typer.Option("--bars", exists=True, dir_okay=False, help="Offline bars parquet."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Write the JSON calendar here."),
+    ] = None,
+) -> None:
+    """Forward tailwind calendar with per-session win scores and anchors.
+
+    Daily granularity plus the two auction anchors; hourly and 15-minute
+    calendars are DATA_UNAVAILABLE by construction, never estimated.
+    """
+
+    import asyncio
+    from datetime import date as date_type
+    from datetime import timedelta
+
+    import pandas as pd
+
+    from edgestack.advisor import advise as build_report
+
+    warnings: tuple[str, ...] = ()
+    if bars is not None:
+        frame = pd.read_parquet(bars)
+    else:
+        from edgestack.data.sources import (
+            FallbackDailyBarSource,
+            StooqDailyBarSource,
+            YahooDailyBarSource,
+            bars_to_frame,
+        )
+        from edgestack.models import AssetKey, BarRequest
+
+        async def _fetch() -> tuple[pd.DataFrame, tuple[str, ...]]:
+            chain = FallbackDailyBarSource(
+                (StooqDailyBarSource(), YahooDailyBarSource())
+            )
+            batch = await chain.fetch_bars(
+                BarRequest(
+                    AssetKey(symbol.upper()),
+                    date_type.today() - timedelta(days=365 * years),
+                    date_type.today(),
+                    adjusted=True,
+                )
+            )
+            return bars_to_frame(batch), tuple(batch.warnings)
+
+        frame, warnings = asyncio.run(_fetch())
+    report = build_report(
+        frame,
+        symbol=symbol.upper(),
+        scan_sessions=sessions,
+        provenance_warnings=warnings,
+        root=Path.cwd(),
+    )
+    calendar = {
+        "status": report["status"],
+        "symbol": report["symbol"],
+        "as_of_session": report["as_of_session"],
+        "policy": report["alignment"]["policy"],
+        "anchors": report["timing"]["anchors"],
+        "calendar": report["alignment"]["calendar"],
+        "validated_edges": report["validated_edges"],
+        "provenance_warnings": report["provenance_warnings"],
+        "disclaimer": report["disclaimer"],
+    }
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(calendar, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        console.print(f"Tailwind calendar written to [bold]{output}[/bold]")
+    console.print_json(data=calendar)
+
+
+@app.command("universe-pit-audit")
+def universe_pit_audit(
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/full.yaml"),
+    start: Annotated[
+        str, typer.Option("--start", metavar="YYYY-MM-DD")
+    ] = "1996-01-01",
+    end: Annotated[str | None, typer.Option("--end", metavar="YYYY-MM-DD")] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Write the JSON report here."),
+    ] = None,
+) -> None:
+    """Audit delisted-name price coverage for PIT universe reconstruction.
+
+    Crosses the Wikipedia S&P 500 change log against the hash-pinned Stooq
+    bulk archive member index. Report-only; decides how far back a
+    PIT_APPROXIMATION universe is honest.
+    """
+
+    import asyncio
+    from datetime import date as date_type
+
+    from edgestack.data.pit_audit import summarize_pit_coverage
+    from edgestack.data.sources import StooqBulkArchiveDailyBarSource
+    from edgestack.data.universe import WikipediaSP500UniverseSource
+
+    resolved = load_config(config)
+    providers = resolved.data.providers
+    if providers.stooq_bulk_archive is None or providers.stooq_bulk_sha256 is None:
+        raise typer.BadParameter(
+            "the config must pin data.providers.stooq_bulk_archive and "
+            "stooq_bulk_sha256",
+            param_hint="--config",
+        )
+    start_date = _parse_iso_date(start, "--start")
+    end_date = _parse_iso_date(end, "--end") or date_type.today()
+    assert start_date is not None
+    bulk = StooqBulkArchiveDailyBarSource(
+        providers.stooq_bulk_archive,
+        expected_sha256=providers.stooq_bulk_sha256,
+    )
+    changes = asyncio.run(
+        WikipediaSP500UniverseSource().membership_changes(start_date, end_date)
+    )
+    report = summarize_pit_coverage(
+        changes, bulk._members.keys(), start=start_date, end=end_date
+    )
+    report["archive_sha256"] = bulk.archive_sha256
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        console.print(f"PIT coverage report written to [bold]{output}[/bold]")
+    console.print_json(data=report)
+
+
+@app.command("universe-bias-delta")
+def universe_bias_delta_command(
+    campaign: Annotated[str, typer.Option("--campaign")],
+    artifacts: Annotated[
+        Path, typer.Option(file_okay=False, help="EdgeStack artifact directory.")
+    ] = Path("artifacts"),
+) -> None:
+    """Measure the survivorship-bias inflation of two replicated signals.
+
+    Report-only: reruns gross reversal/momentum decile streams on the
+    campaign's persisted bars with and without the PIT membership mask.
+    """
+
+    import pandas as pd
+
+    from edgestack.data.pit_audit import universe_bias_delta
+
+    campaign_root = artifacts / "campaigns" / campaign
+    bars_path = campaign_root / "data" / "bars.parquet"
+    universe_path = campaign_root / "data" / "universe.parquet"
+    for path in (bars_path, universe_path):
+        if not path.is_file():
+            raise typer.BadParameter(
+                f"missing campaign artifact: {path}", param_hint="--campaign"
+            )
+    report = universe_bias_delta(
+        pd.read_parquet(bars_path), pd.read_parquet(universe_path)
+    )
+    output = campaign_root / "diagnostics" / "universe_bias_delta.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    console.print(f"Bias-delta report written to [bold]{output}[/bold]")
+    console.print_json(data=report)
+
+
+@app.command("holdout-diagnostic")
+def holdout_diagnostic(
+    campaign: Annotated[str, typer.Option("--campaign")],
+    artifacts: Annotated[
+        Path, typer.Option(file_okay=False, help="EdgeStack artifact directory.")
+    ] = Path("artifacts"),
+) -> None:
+    """Report whether a sealed holdout result would pass the CI_V2 evaluator.
+
+    Reads only the persisted result document; the sealed verdict never changes.
+    """
+
+    from edgestack.pipeline.holdout import retro_ci_diagnostic
+
+    result_path = artifacts / "campaigns" / campaign / "holdout" / "result.json"
+    if not result_path.is_file():
+        raise typer.BadParameter(
+            f"no sealed holdout result at {result_path}", param_hint="--campaign"
+        )
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    console.print_json(data=retro_ci_diagnostic(payload))
+
+
 @app.command("paper-scorecard")
 def paper_scorecard(
     database: Annotated[Path, typer.Option("--database", exists=True, dir_okay=False)],
