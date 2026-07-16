@@ -61,6 +61,7 @@ import com.edgestack.mobile.data.MobileSnapshot
 import com.edgestack.mobile.data.HorizonPlan
 import com.edgestack.mobile.data.Recommendation
 import com.edgestack.mobile.data.SnapshotOrigin
+import com.edgestack.mobile.data.SniperPolicy
 import com.edgestack.mobile.ui.theme.Coral
 import com.edgestack.mobile.ui.theme.Fog
 import com.edgestack.mobile.ui.theme.Gold
@@ -73,7 +74,7 @@ import java.util.Locale
 private enum class AppTab(val label: String, val icon: ImageVector) {
     PLAN("Plan", Icons.AutoMirrored.Outlined.ShowChart),
     BASKET("Basket", Icons.Outlined.Assessment),
-    HORIZONS("Horizons", Icons.Outlined.DateRange),
+    HORIZONS("Sniper", Icons.Outlined.DateRange),
     EVIDENCE("Evidence", Icons.Outlined.Shield),
     SETUP("Setup", Icons.Outlined.Settings),
 }
@@ -168,11 +169,56 @@ private fun SnapshotContent(
 private fun HorizonsScreen(snapshot: MobileSnapshot) {
     BaseList(snapshot) {
         item {
-            Text("Decision horizons", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("A short-horizon signal cannot be stretched into a monthly or yearly forecast.", color = Fog)
+            Text("Sniper decision", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("Loss-first: no trade unless every causal layer passes.", color = Fog)
         }
+        item { SniperCard(snapshot.sniper) }
+        item { Text("Horizon evidence", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         items(snapshot.horizons, key = { it.horizon }) { plan ->
             HorizonCard(plan)
+        }
+    }
+}
+
+@Composable
+private fun SniperCard(policy: SniperPolicy) {
+    val active = policy.status == "CONDITIONAL_PAPER_CANDIDATE"
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = (if (active) Mint else Coral).copy(alpha = 0.10f),
+        ),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                policy.status.replace('_', ' '),
+                color = if (active) Mint else Coral,
+                fontSize = 34.sp,
+                fontWeight = FontWeight.Black,
+            )
+            Text("WATCHLIST ONLY · ${policy.candidateSymbols.joinToString(" · ")}", color = Gold, fontWeight = FontWeight.Bold)
+            Text(policy.releaseCondition, color = Fog)
+            SectionCard("Tailwind alignment") {
+                policy.alignments.forEach { layer ->
+                    val passed = layer.status == "PASS"
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(layer.horizon, fontWeight = FontWeight.Black)
+                        Text(layer.status, color = if (passed) Mint else Coral, fontWeight = FontWeight.Bold)
+                    }
+                    Text(layer.evidence, color = Fog, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            SectionCard("Loss budget · $100,000 paper account") {
+                KeyValue("Maximum / name", percent(policy.maxNameWeight))
+                KeyValue("Maximum gross", percent(policy.maxGrossExposure))
+                KeyValue("Planned loss / name", money(policy.maxPlannedLossPerNameUsd))
+                KeyValue("Planned basket loss", money(policy.maxPlannedBasketLossUsd))
+                Text(policy.validationStatus.replace('_', ' '), color = Gold, style = MaterialTheme.typography.labelSmall)
+            }
+            SectionCard("Hard vetoes") {
+                policy.hardVetoes.forEach { Text("• ${it.replace('_', ' ')}", color = Coral) }
+            }
+            Text(policy.executionWindow, color = Gold, fontWeight = FontWeight.Bold)
+            Notice(policy.stopWarning, Coral)
         }
     }
 }

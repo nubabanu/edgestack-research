@@ -28,6 +28,9 @@ def test_demo_snapshot_is_strict_and_visibly_non_live(tmp_path: Path) -> None:
     assert snapshot.horizons[1].status == "DATA_UNAVAILABLE"
     assert snapshot.horizons[1].symbols == ()
     assert snapshot.horizons[2].status == "DATA_UNAVAILABLE"
+    assert snapshot.sniper.status == "NO_TRADE"
+    assert snapshot.sniper.max_planned_loss_per_name_usd == 100.0
+    assert snapshot.sniper.candidate_symbols == ("IBM", "ERIE", "APP", "PNR", "PGR")
 
 
 def test_mobile_api_requires_constant_bearer_and_sets_evidence_headers(
@@ -56,7 +59,7 @@ def test_mobile_api_requires_constant_bearer_and_sets_evidence_headers(
     assert response.status_code == 200
     assert response.headers["etag"].startswith('"')
     assert response.headers["cache-control"] == "private, no-cache"
-    assert response.json()["meta"]["schema_version"] == "1.1"
+    assert response.json()["meta"]["schema_version"] == "1.2"
     assert "/orders" not in client.app.openapi()["paths"]
 
 
@@ -176,4 +179,11 @@ def test_unavailable_horizon_cannot_emit_a_stock(tmp_path: Path) -> None:
     payload = MobileSnapshotService(tmp_path, demo=True).load().model_dump(mode="json")
     payload["horizons"][1]["symbols"] = ["IBM"]
     with pytest.raises(ValidationError, match="cannot emit"):
+        MobileSnapshot.model_validate(payload)
+
+
+def test_sniper_cannot_activate_without_all_layers_passing(tmp_path: Path) -> None:
+    payload = MobileSnapshotService(tmp_path, demo=True).load().model_dump(mode="json")
+    payload["sniper"]["status"] = "CONDITIONAL_PAPER_CANDIDATE"
+    with pytest.raises(ValidationError, match="every alignment"):
         MobileSnapshot.model_validate(payload)

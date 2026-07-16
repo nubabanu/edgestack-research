@@ -172,7 +172,8 @@ confirmation.
 
 The `android/` project is a native Jetpack Compose application for reviewing a
 promoted paper basket, causal entry/exit instructions, sealed holdout evidence,
-evidence-aware week/month/year availability, and the immutable audit trail. The
+evidence-aware week/month/year availability, a loss-first Sniper no-trade gate,
+and the immutable audit trail. The
 research engine remains on Python: NumPy,
 PyArrow, DuckDB, Zipline, campaign data, and holdout access are deliberately not
 embedded in an Android process. The mobile API is read-only and defines no broker

@@ -87,7 +87,12 @@ evidence or display it as a network-validated promoted snapshot.
   time exit, cancel conditions, paper capital, and risk constraints.
 - **Basket** shows every name in the tested basket. It warns against selecting
   only rank one or substituting a missing name.
-- **Horizons** shows separate week, month, and year decisions. The promoted
+- **Sniper** defaults to `NO TRADE` and requires year, month, week, and entry-day
+  layers to pass together. Its conservative paper overlay caps each name at 5%,
+  gross exposure at 25%, planned loss at $100 per name, and aggregate planned
+  basket loss at $500 on the $100,000 reference account. These values are risk
+  constraints, not validated alpha and not guaranteed realized-loss limits.
+- The Sniper screen also shows separate week, month, and year decisions. The promoted
   five-session basket appears under Week with entry/review/exit and cancellation
   rules. Month and Year fail closed as `DATA_UNAVAILABLE` and cannot emit a
   ticker until their own model, freeze, and future holdout exist.
@@ -111,5 +116,7 @@ explicit warning. Demo and stale data are never styled as fresh network data.
 - Current-constituent results remain visibly `SURVIVORSHIP_BIASED`.
 - Confidence is ordinal, not a probability of profit.
 - The 2×ATR level is a reference risk control, not validated alpha.
+- Stop triggers are not guaranteed execution prices; gaps and slippage can make
+  realized loss exceed the displayed planned-loss budget.
 - The app cannot make a stale recommendation current; refresh and causal
   server-side revalidation are required.

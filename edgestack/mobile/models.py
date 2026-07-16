@@ -19,7 +19,7 @@ class WireModel(BaseModel):
 class ApiMeta(WireModel):
     """Version and freshness metadata for one atomic snapshot."""
 
-    schema_version: Literal["1.1"] = "1.1"
+    schema_version: Literal["1.2"] = "1.2"
     generated_at: datetime
     market_as_of: str
     source: str
@@ -105,6 +105,32 @@ class HorizonPlan(WireModel):
     unlock_requirement: str
 
 
+class AlignmentLayer(WireModel):
+    """One causal layer required by the loss-first Sniper policy."""
+
+    horizon: Literal["YEAR", "MONTH", "WEEK", "DAY"]
+    status: Literal["PASS", "PENDING", "UNVALIDATED", "FAIL"]
+    evidence: str
+
+
+class SniperPolicy(WireModel):
+    """Conservative paper overlay that defaults to no trade."""
+
+    status: Literal["NO_TRADE", "CONDITIONAL_PAPER_CANDIDATE"]
+    objective: Literal["LOSS_FIRST"] = "LOSS_FIRST"
+    candidate_symbols: tuple[str, ...]
+    max_name_weight: float = Field(gt=0, le=1)
+    max_gross_exposure: float = Field(gt=0, le=1)
+    max_planned_loss_per_name_usd: float = Field(gt=0)
+    max_planned_basket_loss_usd: float = Field(gt=0)
+    execution_window: str
+    alignments: tuple[AlignmentLayer, ...]
+    hard_vetoes: tuple[str, ...]
+    release_condition: str
+    stop_warning: str
+    validation_status: Literal["RISK_OVERLAY_NOT_VALIDATED_ALPHA"]
+
+
 class MobileSnapshot(WireModel):
     """Atomic Android home-screen payload."""
 
@@ -122,6 +148,7 @@ class MobileSnapshot(WireModel):
     holdout: HoldoutEvidence
     audit: tuple[AuditItem, ...]
     horizons: tuple[HorizonPlan, ...]
+    sniper: SniperPolicy
     disclaimer: str = DISCLAIMER
 
     def model_post_init(self, __context: object) -> None:
@@ -149,3 +176,20 @@ class MobileSnapshot(WireModel):
             for plan in self.horizons
         ):
             raise ValueError("unavailable horizons cannot emit stock recommendations")
+        if [layer.horizon for layer in self.sniper.alignments] != [
+            "YEAR",
+            "MONTH",
+            "WEEK",
+            "DAY",
+        ]:
+            raise ValueError("sniper alignment must contain YEAR, MONTH, WEEK, DAY")
+        if self.sniper.candidate_symbols != symbols:
+            raise ValueError(
+                "sniper watchlist must preserve the complete weekly basket"
+            )
+        if self.sniper.status == "CONDITIONAL_PAPER_CANDIDATE" and any(
+            layer.status != "PASS" for layer in self.sniper.alignments
+        ):
+            raise ValueError("sniper candidate requires every alignment layer to pass")
+        if self.sniper.status == "NO_TRADE" and not self.sniper.hard_vetoes:
+            raise ValueError("sniper no-trade status requires a visible hard veto")

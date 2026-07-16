@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from edgestack.mobile.models import (
+    AlignmentLayer,
     ApiMeta,
     AuditItem,
     EntryInstruction,
@@ -18,6 +19,7 @@ from edgestack.mobile.models import (
     MobileRecommendation,
     MobileSnapshot,
     PortfolioSummary,
+    SniperPolicy,
 )
 from edgestack.provenance import sha256_file
 
@@ -186,6 +188,7 @@ class MobileSnapshotService:
                 ),
             ),
             horizons=_horizon_plans(recommendations, entry, exit_),
+            sniper=_sniper_policy(recommendations),
         )
 
 
@@ -243,6 +246,51 @@ def _horizon_plans(
             ),
             unlock_requirement="Requires a new causal annual study, full cost/OOS gauntlet, freeze, and future holdout.",
         ),
+    )
+
+
+def _sniper_policy(
+    recommendations: tuple[MobileRecommendation, ...],
+) -> SniperPolicy:
+    return SniperPolicy(
+        status="NO_TRADE",
+        candidate_symbols=tuple(item.symbol for item in recommendations),
+        max_name_weight=0.05,
+        max_gross_exposure=0.25,
+        max_planned_loss_per_name_usd=100.0,
+        max_planned_basket_loss_usd=500.0,
+        execution_window="Revalidate 15:30-15:45 ET; complete-basket MOC only.",
+        alignments=(
+            AlignmentLayer(
+                horizon="YEAR",
+                status="UNVALIDATED",
+                evidence="No promoted 252-session regime or stock-selection model exists.",
+            ),
+            AlignmentLayer(
+                horizon="MONTH",
+                status="UNVALIDATED",
+                evidence="No promoted 21-session model exists.",
+            ),
+            AlignmentLayer(
+                horizon="WEEK",
+                status="PASS",
+                evidence="The five-session reversal basket has a sealed PASS holdout.",
+            ),
+            AlignmentLayer(
+                horizon="DAY",
+                status="PENDING",
+                evidence="Fresh quotes, membership, news, halts, and MOC availability require pre-close revalidation.",
+            ),
+        ),
+        hard_vetoes=(
+            "YEAR_ALIGNMENT_UNVALIDATED",
+            "MONTH_ALIGNMENT_UNVALIDATED",
+            "DAY_REVALIDATION_PENDING",
+            "HIGH_EVENT_RISK_IN_WEEKLY_BASKET",
+        ),
+        release_condition="Remain NO TRADE until all four layers are independently validated and pass on the same causal snapshot.",
+        stop_warning="Planned loss is a sizing budget, not a guarantee. Stops can gap, slip, whipsaw, or fail to execute at the trigger price.",
+        validation_status="RISK_OVERLAY_NOT_VALIDATED_ALPHA",
     )
 
 

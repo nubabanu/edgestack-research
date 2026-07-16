@@ -89,6 +89,30 @@ data class HorizonPlan(
 )
 
 @Serializable
+data class AlignmentLayer(
+    val horizon: String,
+    val status: String,
+    val evidence: String,
+)
+
+@Serializable
+data class SniperPolicy(
+    val status: String,
+    val objective: String,
+    @SerialName("candidate_symbols") val candidateSymbols: List<String>,
+    @SerialName("max_name_weight") val maxNameWeight: Double,
+    @SerialName("max_gross_exposure") val maxGrossExposure: Double,
+    @SerialName("max_planned_loss_per_name_usd") val maxPlannedLossPerNameUsd: Double,
+    @SerialName("max_planned_basket_loss_usd") val maxPlannedBasketLossUsd: Double,
+    @SerialName("execution_window") val executionWindow: String,
+    val alignments: List<AlignmentLayer>,
+    @SerialName("hard_vetoes") val hardVetoes: List<String>,
+    @SerialName("release_condition") val releaseCondition: String,
+    @SerialName("stop_warning") val stopWarning: String,
+    @SerialName("validation_status") val validationStatus: String,
+)
+
+@Serializable
 data class MobileSnapshot(
     val meta: ApiMeta,
     @SerialName("campaign_id") val campaignId: String,
@@ -104,10 +128,11 @@ data class MobileSnapshot(
     val holdout: HoldoutEvidence,
     val audit: List<AuditItem>,
     val horizons: List<HorizonPlan>,
+    val sniper: SniperPolicy,
     val disclaimer: String,
 ) {
     fun validate(): MobileSnapshot {
-        require(meta.schemaVersion == "1.1") { "Unsupported mobile schema" }
+        require(meta.schemaVersion == "1.2") { "Unsupported mobile schema" }
         require(recommendations.map { it.rank } == (1..recommendations.size).toList()) {
             "Recommendation ranks are incomplete or reordered"
         }
@@ -132,6 +157,19 @@ data class MobileSnapshot(
             horizons.filter { it.status == "DATA_UNAVAILABLE" }
                 .all { it.recommendationScope == "NONE" && it.symbols.isEmpty() },
         ) { "Unavailable horizons cannot emit stock recommendations" }
+        require(sniper.alignments.map { it.horizon } == listOf("YEAR", "MONTH", "WEEK", "DAY")) {
+            "Sniper alignment must contain YEAR, MONTH, WEEK, DAY"
+        }
+        require(sniper.candidateSymbols == recommendations.map { it.symbol }) {
+            "Sniper watchlist must preserve the complete weekly basket"
+        }
+        require(
+            sniper.status != "CONDITIONAL_PAPER_CANDIDATE" ||
+                sniper.alignments.all { it.status == "PASS" },
+        ) { "Sniper candidate requires every alignment layer to pass" }
+        require(sniper.status != "NO_TRADE" || sniper.hardVetoes.isNotEmpty()) {
+            "Sniper no-trade status requires a visible hard veto"
+        }
         return this
     }
 }
