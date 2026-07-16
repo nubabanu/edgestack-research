@@ -1,0 +1,126 @@
+{
+  "meta": {
+    "schema_version": "1.0",
+    "generated_at": "2026-07-15T21:20:01.559063Z",
+    "market_as_of": "2026-07-15_CLOSE",
+    "source": "Packaged demonstration fixture",
+    "mode": "DEMO",
+    "stale": true
+  },
+  "campaign_id": "demo-reversal-edge-v1",
+  "model_name": "CURRENT_SP500_RAW_5D_REVERSAL_TOP5_HALF_GROSS",
+  "model_status": "DEMO",
+  "bias_tier": "SURVIVORSHIP_BIASED",
+  "watermark": "SURVIVORSHIP_BIASED · DEMO DATA",
+  "basket_rule": "The five names form one inseparable demonstration basket. Confidence is ordinal, not a probability. No order will be sent.",
+  "instruction": {
+    "entry_session": "2026-07-16",
+    "entry_order": "MOC",
+    "submit_by_et": "15:45 America/New_York",
+    "exit_session": "2026-07-23",
+    "exit_order": "MOC",
+    "no_chase": "If the closing-auction cutoff is missed, wait for a new completed-close scan.",
+    "cancel_if": [
+      "Quote is stale or unavailable",
+      "Membership changed",
+      "Closing-auction cutoff was missed",
+      "The complete basket cannot be implemented"
+    ]
+  },
+  "portfolio": {
+    "paper_capital_usd": 100000.0,
+    "target_gross": 0.5,
+    "maximum_name_weight": 0.1,
+    "risk_budget_per_name_usd": 500.0,
+    "shorts_enabled": false
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "demo-ibm",
+      "rank": 1,
+      "symbol": "IBM",
+      "direction": "LONG",
+      "confidence_ordinal": 100,
+      "signal_close_usd": 211.2,
+      "trailing_return": -0.300778,
+      "suggested_shares": 15,
+      "reference_stop_usd": 179.59,
+      "event_risk": "HIGH · preliminary earnings miss"
+    },
+    {
+      "recommendation_id": "demo-erie",
+      "rank": 2,
+      "symbol": "ERIE",
+      "direction": "LONG",
+      "confidence_ordinal": 100,
+      "signal_close_usd": 210.19,
+      "trailing_return": -0.163789,
+      "suggested_shares": 26,
+      "reference_stop_usd": 191.44,
+      "event_risk": "HIGH · unresolved single-day repricing"
+    },
+    {
+      "recommendation_id": "demo-app",
+      "rank": 3,
+      "symbol": "APP",
+      "direction": "LONG",
+      "confidence_ordinal": 100,
+      "signal_close_usd": 452.73,
+      "trailing_return": -0.133,
+      "suggested_shares": 7,
+      "reference_stop_usd": 387.88,
+      "event_risk": "HIGH · elevated volatility"
+    },
+    {
+      "recommendation_id": "demo-pnr",
+      "rank": 4,
+      "symbol": "PNR",
+      "direction": "LONG",
+      "confidence_ordinal": 99,
+      "signal_close_usd": 64.33,
+      "trailing_return": -0.121895,
+      "suggested_shares": 72,
+      "reference_stop_usd": 57.45,
+      "event_risk": "HIGH · guidance cut and CFO departure"
+    },
+    {
+      "recommendation_id": "demo-pgr",
+      "rank": 5,
+      "symbol": "PGR",
+      "direction": "LONG",
+      "confidence_ordinal": 99,
+      "signal_close_usd": 205.22,
+      "trailing_return": -0.118849,
+      "suggested_shares": 35,
+      "reference_stop_usd": 191.12,
+      "event_risk": "HIGH · post-results repricing"
+    }
+  ],
+  "skipped": [],
+  "holdout": {
+    "status": "PASS",
+    "start": "2023-07-14",
+    "end": "2026-07-14",
+    "observations": 752,
+    "expected_sessions": 752,
+    "net_mean": 0.0007011333539236128,
+    "benchmark_excess_mean": 0.00031124759492657107,
+    "terminal_wealth": 1.6440875201799787,
+    "benchmark_wealth": 1.329036224385104,
+    "freeze_id": "demo-a5550be02ae6",
+    "result_sha256": "demo-44ce0448a99f"
+  },
+  "audit": [
+    {
+      "occurred_at": "2026-07-15T21:17:10Z",
+      "event_type": "HOLDOUT_SEALED",
+      "message": "Demonstration holdout evidence was sealed for replay."
+    },
+    {
+      "occurred_at": "2026-07-15T21:20:01Z",
+      "event_type": "SIGNAL_FROZEN",
+      "message": "Five-name paper basket created from the completed daily bar."
+    }
+  ],
+  "disclaimer": "EdgeStack is for research and educational purposes only. It is NOT financial advice. No trading edge is guaranteed; documented anomalies decay after publication (McLean & Pontiff 2016 found returns 58% lower post-publication) and often disappear after realistic transaction costs. Most classic technical analysis has no standalone edge on liquid US large caps after costs; timing overlays here are for execution, timing, and risk management, not alpha generation. Backtests use free, survivorship-biased data unless stated otherwise and overstate real performance. Live alerts are computed from free, potentially 15-minute-delayed data and may be stale or wrong; a 'recommendation holds' confirmation is a statistical statement, not a promise. Past performance does not predict future results. Do not trade real capital based on this output without independent professional advice and your own due diligence."
+}

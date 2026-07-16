@@ -207,6 +207,54 @@ def live_demo(
         raise typer.Exit(1)
 
 
+@app.command("mobile-api")
+def mobile_api(
+    host: Annotated[
+        str,
+        typer.Option(help="Bind address; use 0.0.0.0 only on a trusted network."),
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
+    token: Annotated[
+        str | None,
+        typer.Option(
+            envvar="EDGESTACK_MOBILE_TOKEN",
+            help="Bearer token. Required unless --demo is used.",
+        ),
+    ] = None,
+    campaign: Annotated[
+        str | None,
+        typer.Option(
+            help="Targeted campaign whose sealed mobile artifacts are served."
+        ),
+    ] = None,
+    artifacts: Annotated[
+        Path, typer.Option(file_okay=False, help="EdgeStack artifact directory.")
+    ] = Path("artifacts"),
+    demo: Annotated[
+        bool,
+        typer.Option(help="Serve packaged offline demonstration data."),
+    ] = False,
+) -> None:
+    """Serve the read-only Android companion API; never accepts orders."""
+
+    import uvicorn
+
+    from edgestack.mobile.api import create_mobile_app
+
+    if not demo and (token is None or len(token) < 24):
+        raise typer.BadParameter(
+            "a bearer token of at least 24 characters is required outside demo mode",
+            param_hint="--token / EDGESTACK_MOBILE_TOKEN",
+        )
+    application = create_mobile_app(
+        artifact_root=artifacts,
+        campaign_id=campaign,
+        bearer_token=token,
+        demo=demo,
+    )
+    uvicorn.run(application, host=host, port=port, access_log=False)
+
+
 def _run_phase(phase: str, campaign: str, config: Path) -> None:
     from edgestack.pipeline.runner import CampaignRunner
 

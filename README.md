@@ -31,6 +31,7 @@ edgestack/
   cli.py         command-line entry point
 configs/         smoke and full frozen profiles
 tests/           deterministic unit, integration, causal, and external tests
+android/         native Kotlin/Jetpack Compose paper companion
 ```
 
 ## Quick start
@@ -166,6 +167,36 @@ can confirm close fills for close-to-close and overnight conventions. A
 next-open intraday finalist is deliberately unable to pass timestamp agreement
 without independent minute/auction data; importing Zipline alone never counts as
 confirmation.
+
+## Android paper companion
+
+The `android/` project is a native Jetpack Compose application for reviewing a
+promoted paper basket, causal entry/exit instructions, sealed holdout evidence,
+and the immutable audit trail. The research engine remains on Python: NumPy,
+PyArrow, DuckDB, Zipline, campaign data, and holdout access are deliberately not
+embedded in an Android process. The mobile API is read-only and defines no broker
+or order endpoint.
+
+Start a local demonstration server:
+
+```powershell
+edgestack mobile-api --demo
+```
+
+For sealed campaign evidence, create a bearer token in the environment and bind
+to a trusted interface. Use TLS before exposing the service beyond emulator or
+localhost development.
+
+```powershell
+$env:EDGESTACK_MOBILE_TOKEN = '<at-least-24-random-characters>'
+edgestack mobile-api --host 0.0.0.0 --campaign <promoted-campaign-id>
+```
+
+Open `android/` in Android Studio, or build with `android/gradlew.bat
+assembleDebug`. The emulator reaches the host API at `http://10.0.2.2:8765`.
+Cleartext networking is rejected for every non-local host, tokens are held only
+in process memory, and a failed refresh can show only a visibly identified
+sealed cache or packaged demo snapshot. See [Android companion](docs/android.md).
 
 ## Interpreting results
 

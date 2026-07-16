@@ -18,3 +18,12 @@ artifacts/
 *.sqlite-wal
 .env
 /d_us_txt.zip
+/android/.gradle/
+/android/.kotlin/
+/android/local.properties
+/android/**/build/
+/.idea/
+/.vscode/
+*.iml
+/.android-sdk/
+/.gradle-dist/
