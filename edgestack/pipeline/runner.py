@@ -1717,6 +1717,9 @@ class CampaignRunner:
     def _report_figures(self, records: Any, *, final: bool) -> dict[str, str]:
         """Persist report PNGs and return data URIs for self-contained HTML."""
 
+        import matplotlib
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         directory = (

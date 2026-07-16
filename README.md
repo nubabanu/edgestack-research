@@ -26,6 +26,7 @@ edgestack/
   reversal/      top-K rule grid, residual features, rankers, purged studies
   storage/       immutable artifacts and SQLite campaign catalog
   pipeline/      hard gates and single-use holdout ceremony
+  v2/            loss-aware monthly/yearly research and entitled-data gates
   config.py      strict typed YAML configuration
   models.py      immutable public domain contracts
   cli.py         command-line entry point
@@ -107,6 +108,44 @@ curves. It does not rewrite or promote the earlier 5-of-6 campaign.
 The exact resolved configuration is part of a campaign identity, so pass the same
 `--config` file to every command. The final holdout command is intentionally
 one-use: inspect the provisional report before invoking it.
+
+### Loss-aware Research V2
+
+`loss-aware-v2` is a new paper-only namespace. It never reads, modifies, or
+reopens a V1 holdout. Its historical monthly (21-session) and yearly
+(252-session) studies are diagnostics; promotion requires observations generated
+after a model definition is frozen. Create the free-only declaration with:
+
+```powershell
+edgestack loss-aware-v2 --campaign-id forward-001
+```
+
+The declared grid contains all 900 combinations of two horizons, five compact
+signal families, long-only/short-only/market-neutral baskets, ten event-veto
+settings, and 1.0×/1.5×/2.0× gross leverage. Leverage is paper-only, financing is
+daily SOFR + 3%, and a path reaching non-positive equity is rejected. Default
+Sniper ranking is lexicographic loss-first among statistical/OOS passes:
+95% expected shortfall, loss probability, adverse excursion, loss-streak risk,
+then net return. Planned stop risk is shown separately from realized gap/slippage;
+a stop is not a guaranteed fill price.
+
+Free data deliberately leave `PIT_MEMBERSHIP`, `ESTIMATE_VINTAGES`, and
+`AUCTION_EXECUTION` as `DATA_UNAVAILABLE`. Wikipedia history is labeled
+`PIT_APPROXIMATION`; SEC acceptance timestamps provide event diagnostics but do
+not substitute for historical consensus vintages. Licensed CSV/Parquet imports
+must match a declared SHA-256 and retain permanent IDs, ticker validity,
+`event_time`, `available_at`, revision, source, fetch time, and per-record content
+hashes. Auction validation requires NBBO, trades, imbalance messages, and official
+prints for every finalist.
+
+The WAL ledger atomically records every candidate and skip. Apply a recorded mark
+or replay the scorecard without fetching/backfilling history:
+
+```powershell
+edgestack live --campaign loss-aware-v2 --once `
+  --v2-database artifacts/loss-aware-v2/forward.sqlite --marks marks.json
+edgestack paper-scorecard --database artifacts/loss-aware-v2/forward.sqlite
+```
 
 ### Selection-aware reversal study
 

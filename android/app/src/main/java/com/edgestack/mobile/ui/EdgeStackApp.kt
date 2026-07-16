@@ -172,7 +172,7 @@ private fun HorizonsScreen(snapshot: MobileSnapshot) {
             Text("Sniper decision", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Text("Loss-first: no trade unless every causal layer passes.", color = Fog)
         }
-        item { SniperCard(snapshot.sniper) }
+        item { SniperCard(snapshot.sniper, snapshot.lossAwareV2) }
         item { Text("Horizon evidence", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
         items(snapshot.horizons, key = { it.horizon }) { plan ->
             HorizonCard(plan)
@@ -181,7 +181,7 @@ private fun HorizonsScreen(snapshot: MobileSnapshot) {
 }
 
 @Composable
-private fun SniperCard(policy: SniperPolicy) {
+private fun SniperCard(policy: SniperPolicy, v2: com.edgestack.mobile.data.LossAwareV2Summary) {
     val active = policy.status == "CONDITIONAL_PAPER_CANDIDATE"
     Card(
         colors = CardDefaults.cardColors(
@@ -197,6 +197,31 @@ private fun SniperCard(policy: SniperPolicy) {
             )
             Text("WATCHLIST ONLY · ${policy.candidateSymbols.joinToString(" · ")}", color = Gold, fontWeight = FontWeight.Bold)
             Text(policy.releaseCondition, color = Fog)
+            SectionCard("V2 selection · loss before return") {
+                KeyValue("Horizon", v2.selectedHorizon.replace('_', ' '))
+                KeyValue("Gross leverage", "${v2.selectedLeverage}× paper only")
+                KeyValue("Evidence", v2.evidenceStatus.replace('_', ' '))
+                if (v2.lossMetrics.status == "AVAILABLE") {
+                    KeyValue("Loss probability", percent(v2.lossMetrics.lossProbability ?: 0.0))
+                    KeyValue("Expected shortfall 95%", percent(v2.lossMetrics.expectedShortfall95 ?: 0.0))
+                    KeyValue("Maximum adverse excursion", percent(v2.lossMetrics.maximumAdverseExcursion ?: 0.0))
+                    KeyValue("Worst-decile threshold", percent(v2.lossMetrics.tenthPercentileReturn ?: 0.0))
+                    KeyValue("90% loss streak", "${v2.lossMetrics.losingStreakP90 ?: 0.0} cohorts")
+                } else {
+                    Text("Loss metrics unavailable · NO TRADE", color = Coral, fontWeight = FontWeight.Bold)
+                }
+            }
+            SectionCard("Event and data gates") {
+                v2.dataGates.forEach { gate ->
+                    KeyValue(gate.name.replace('_', ' '), gate.status.replace('_', ' '))
+                    Text(gate.reason, color = Fog, style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    if (v2.enabledEventVetoes.isEmpty()) "No veto enabled without evidence"
+                    else "Enabled: ${v2.enabledEventVetoes.joinToString()}",
+                    color = Gold,
+                )
+            }
             SectionCard("Tailwind alignment") {
                 policy.alignments.forEach { layer ->
                     val passed = layer.status == "PASS"
@@ -218,6 +243,7 @@ private fun SniperCard(policy: SniperPolicy) {
                 policy.hardVetoes.forEach { Text("• ${it.replace('_', ' ')}", color = Coral) }
             }
             Text(policy.executionWindow, color = Gold, fontWeight = FontWeight.Bold)
+            Text(v2.timing, color = Gold, fontWeight = FontWeight.Bold)
             Notice(policy.stopWarning, Coral)
         }
     }

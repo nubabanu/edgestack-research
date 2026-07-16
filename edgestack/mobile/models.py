@@ -19,7 +19,7 @@ class WireModel(BaseModel):
 class ApiMeta(WireModel):
     """Version and freshness metadata for one atomic snapshot."""
 
-    schema_version: Literal["1.2"] = "1.2"
+    schema_version: Literal["1.3"] = "1.3"
     generated_at: datetime
     market_as_of: str
     source: str
@@ -131,6 +131,39 @@ class SniperPolicy(WireModel):
     validation_status: Literal["RISK_OVERLAY_NOT_VALIDATED_ALPHA"]
 
 
+class MobileDataGate(WireModel):
+    """Fail-closed V2 input capability shown before a recommendation."""
+
+    name: Literal["PIT_MEMBERSHIP", "ESTIMATE_VINTAGES", "AUCTION_EXECUTION"]
+    status: Literal["PASS", "FAIL", "DATA_UNAVAILABLE"]
+    reason: str
+
+
+class MobileLossMetrics(WireModel):
+    """Downside evidence displayed before expected return."""
+
+    status: Literal["AVAILABLE", "DATA_UNAVAILABLE"]
+    loss_probability: float | None = Field(default=None, ge=0, le=1)
+    expected_shortfall_95: float | None = Field(default=None, ge=0)
+    maximum_adverse_excursion: float | None = Field(default=None, le=0)
+    tenth_percentile_return: float | None = None
+    losing_streak_p90: float | None = Field(default=None, ge=0)
+
+
+class LossAwareV2Summary(WireModel):
+    """Forward-only V2 selection and entitlement boundary."""
+
+    namespace: Literal["loss-aware-v2"] = "loss-aware-v2"
+    evidence_status: Literal["FORWARD_REQUIRED", "FORWARD_TRACKING"]
+    selected_horizon: Literal["NONE", "MONTHLY_21", "YEARLY_252"]
+    selected_leverage: float
+    ranking: Literal["LOSS_FIRST"] = "LOSS_FIRST"
+    loss_metrics: MobileLossMetrics
+    data_gates: tuple[MobileDataGate, ...]
+    enabled_event_vetoes: tuple[str, ...]
+    timing: str
+
+
 class MobileSnapshot(WireModel):
     """Atomic Android home-screen payload."""
 
@@ -138,7 +171,7 @@ class MobileSnapshot(WireModel):
     campaign_id: str
     model_name: str
     model_status: Literal["PROMOTED", "REJECTED", "DEMO"]
-    bias_tier: Literal["SURVIVORSHIP_BIASED", "POINT_IN_TIME"]
+    bias_tier: Literal["SURVIVORSHIP_BIASED", "PIT_APPROXIMATION", "POINT_IN_TIME"]
     watermark: str
     basket_rule: str
     instruction: EntryInstruction
@@ -149,6 +182,7 @@ class MobileSnapshot(WireModel):
     audit: tuple[AuditItem, ...]
     horizons: tuple[HorizonPlan, ...]
     sniper: SniperPolicy
+    loss_aware_v2: LossAwareV2Summary
     disclaimer: str = DISCLAIMER
 
     def model_post_init(self, __context: object) -> None:
@@ -193,3 +227,17 @@ class MobileSnapshot(WireModel):
             raise ValueError("sniper candidate requires every alignment layer to pass")
         if self.sniper.status == "NO_TRADE" and not self.sniper.hard_vetoes:
             raise ValueError("sniper no-trade status requires a visible hard veto")
+        required_gates = ["PIT_MEMBERSHIP", "ESTIMATE_VINTAGES", "AUCTION_EXECUTION"]
+        if [gate.name for gate in self.loss_aware_v2.data_gates] != required_gates:
+            raise ValueError("V2 data gates must be complete and ordered")
+        if self.loss_aware_v2.selected_horizon != "NONE" and any(
+            gate.status != "PASS" for gate in self.loss_aware_v2.data_gates
+        ):
+            raise ValueError("V2 selection requires every data gate to pass")
+        if (
+            self.loss_aware_v2.loss_metrics.status == "DATA_UNAVAILABLE"
+            and self.loss_aware_v2.selected_horizon != "NONE"
+        ):
+            raise ValueError("V2 selection requires loss evidence")
+        if self.loss_aware_v2.selected_leverage not in {1.0, 1.5, 2.0}:
+            raise ValueError("V2 leverage must be a preregistered trial")

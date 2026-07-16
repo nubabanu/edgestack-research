@@ -113,6 +113,36 @@ data class SniperPolicy(
 )
 
 @Serializable
+data class MobileDataGate(
+    val name: String,
+    val status: String,
+    val reason: String,
+)
+
+@Serializable
+data class MobileLossMetrics(
+    val status: String,
+    @SerialName("loss_probability") val lossProbability: Double? = null,
+    @SerialName("expected_shortfall_95") val expectedShortfall95: Double? = null,
+    @SerialName("maximum_adverse_excursion") val maximumAdverseExcursion: Double? = null,
+    @SerialName("tenth_percentile_return") val tenthPercentileReturn: Double? = null,
+    @SerialName("losing_streak_p90") val losingStreakP90: Double? = null,
+)
+
+@Serializable
+data class LossAwareV2Summary(
+    val namespace: String,
+    @SerialName("evidence_status") val evidenceStatus: String,
+    @SerialName("selected_horizon") val selectedHorizon: String,
+    @SerialName("selected_leverage") val selectedLeverage: Double,
+    val ranking: String,
+    @SerialName("loss_metrics") val lossMetrics: MobileLossMetrics,
+    @SerialName("data_gates") val dataGates: List<MobileDataGate>,
+    @SerialName("enabled_event_vetoes") val enabledEventVetoes: List<String>,
+    val timing: String,
+)
+
+@Serializable
 data class MobileSnapshot(
     val meta: ApiMeta,
     @SerialName("campaign_id") val campaignId: String,
@@ -129,10 +159,11 @@ data class MobileSnapshot(
     val audit: List<AuditItem>,
     val horizons: List<HorizonPlan>,
     val sniper: SniperPolicy,
+    @SerialName("loss_aware_v2") val lossAwareV2: LossAwareV2Summary,
     val disclaimer: String,
 ) {
     fun validate(): MobileSnapshot {
-        require(meta.schemaVersion == "1.2") { "Unsupported mobile schema" }
+        require(meta.schemaVersion == "1.3") { "Unsupported mobile schema" }
         require(recommendations.map { it.rank } == (1..recommendations.size).toList()) {
             "Recommendation ranks are incomplete or reordered"
         }
@@ -170,6 +201,17 @@ data class MobileSnapshot(
         require(sniper.status != "NO_TRADE" || sniper.hardVetoes.isNotEmpty()) {
             "Sniper no-trade status requires a visible hard veto"
         }
+        require(lossAwareV2.dataGates.map { it.name } == listOf("PIT_MEMBERSHIP", "ESTIMATE_VINTAGES", "AUCTION_EXECUTION")) {
+            "V2 data gates must be complete and ordered"
+        }
+        require(
+            lossAwareV2.selectedHorizon == "NONE" ||
+                lossAwareV2.dataGates.all { it.status == "PASS" },
+        ) { "V2 selection requires every data gate to pass" }
+        require(
+            lossAwareV2.selectedHorizon == "NONE" ||
+                lossAwareV2.lossMetrics.status == "AVAILABLE",
+        ) { "V2 selection requires loss evidence" }
         return this
     }
 }

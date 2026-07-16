@@ -16,6 +16,9 @@ from edgestack.mobile.models import (
     EntryInstruction,
     HoldoutEvidence,
     HorizonPlan,
+    LossAwareV2Summary,
+    MobileDataGate,
+    MobileLossMetrics,
     MobileRecommendation,
     MobileSnapshot,
     PortfolioSummary,
@@ -189,6 +192,7 @@ class MobileSnapshotService:
             ),
             horizons=_horizon_plans(recommendations, entry, exit_),
             sniper=_sniper_policy(recommendations),
+            loss_aware_v2=_free_only_v2(),
         )
 
 
@@ -291,6 +295,36 @@ def _sniper_policy(
         release_condition="Remain NO TRADE until all four layers are independently validated and pass on the same causal snapshot.",
         stop_warning="Planned loss is a sizing budget, not a guarantee. Stops can gap, slip, whipsaw, or fail to execute at the trigger price.",
         validation_status="RISK_OVERLAY_NOT_VALIDATED_ALPHA",
+    )
+
+
+def _free_only_v2() -> LossAwareV2Summary:
+    """Expose missing entitlements as NO TRADE, never inferred evidence."""
+
+    return LossAwareV2Summary(
+        evidence_status="FORWARD_REQUIRED",
+        selected_horizon="NONE",
+        selected_leverage=1.0,
+        loss_metrics=MobileLossMetrics(status="DATA_UNAVAILABLE"),
+        data_gates=(
+            MobileDataGate(
+                name="PIT_MEMBERSHIP",
+                status="DATA_UNAVAILABLE",
+                reason="Wikipedia reconstruction is PIT_APPROXIMATION, not genuine point-in-time membership.",
+            ),
+            MobileDataGate(
+                name="ESTIMATE_VINTAGES",
+                status="DATA_UNAVAILABLE",
+                reason="Historical consensus vintages are not configured.",
+            ),
+            MobileDataGate(
+                name="AUCTION_EXECUTION",
+                status="DATA_UNAVAILABLE",
+                reason="NBBO, trades, imbalances, and official auction prints are not configured.",
+            ),
+        ),
+        enabled_event_vetoes=(),
+        timing="NO TRADE; monthly/yearly timing unlocks only after forward evidence and all gates pass.",
     )
 
 

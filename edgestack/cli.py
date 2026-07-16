@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+import json
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -183,14 +184,84 @@ def live(
     once: Annotated[
         bool, typer.Option("--once", help="Run one scan instead of scheduling.")
     ] = False,
+    v2_database: Annotated[
+        Path | None,
+        typer.Option(
+            "--v2-database",
+            help="Loss-aware V2 forward ledger; bypasses V1 holdout access.",
+        ),
+    ] = None,
+    marks: Annotated[
+        Path | None,
+        typer.Option(
+            "--marks",
+            exists=True,
+            dir_okay=False,
+            help="Recorded causal marks JSON for a V2 --once replay.",
+        ),
+    ] = None,
 ) -> None:
     """Start the paper-only scanner/monitor after final holdout promotion."""
+
+    if v2_database is not None:
+        if not once:
+            raise typer.BadParameter("V2 forward marking currently requires --once")
+        from edgestack.live.state import StateStore
+
+        store = StateStore(v2_database)
+        if marks is not None:
+            payload = json.loads(marks.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                raise typer.BadParameter("--marks must contain a JSON list")
+            for item in payload:
+                store.record_paper_mark(
+                    str(item["decision_id"]),
+                    mark_at=datetime.fromisoformat(str(item["mark_at"])),
+                    available_at=datetime.fromisoformat(str(item["available_at"])),
+                    price=float(item["price"]),
+                    causal_data_hash=str(item["causal_data_hash"]),
+                )
+        console.print_json(data=store.paper_scorecard())
+        return
 
     from edgestack.pipeline.runner import CampaignRunner
 
     runner = CampaignRunner.open(load_config(config), campaign)
     result = runner.live(once=once)
     console.print(result)
+
+
+@app.command("loss-aware-v2")
+def loss_aware_v2(
+    campaign_id: Annotated[str, typer.Option("--campaign-id")],
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/loss-aware-v2.yaml"),
+    artifacts: Annotated[Path, typer.Option(file_okay=False)] = Path("artifacts"),
+) -> None:
+    """Create the isolated free-only V2 diagnostic and forward declaration."""
+
+    from edgestack.v2.campaign import create_free_only_diagnostic
+
+    output = create_free_only_diagnostic(
+        artifacts, campaign_id=campaign_id, config_path=config
+    )
+    console.print(f"V2 diagnostic written to [bold]{output}[/bold]")
+    console.print(
+        "PIT membership, estimate vintages, and auction execution are "
+        "DATA_UNAVAILABLE until hash-pinned entitled files are imported."
+    )
+
+
+@app.command("paper-scorecard")
+def paper_scorecard(
+    database: Annotated[Path, typer.Option("--database", exists=True, dir_okay=False)],
+) -> None:
+    """Replay the V2 paper scorecard without network access or backfills."""
+
+    from edgestack.live.state import StateStore
+
+    console.print_json(data=StateStore(database).paper_scorecard())
 
 
 @app.command("live-demo")
