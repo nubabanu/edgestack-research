@@ -87,6 +87,10 @@ evidence or display it as a network-validated promoted snapshot.
   time exit, cancel conditions, paper capital, and risk constraints.
 - **Basket** shows every name in the tested basket. It warns against selecting
   only rank one or substituting a missing name.
+- **Horizons** shows separate week, month, and year decisions. The promoted
+  five-session basket appears under Week with entry/review/exit and cancellation
+  rules. Month and Year fail closed as `DATA_UNAVAILABLE` and cannot emit a
+  ticker until their own model, freeze, and future holdout exist.
 - **Evidence** replays holdout coverage, mean returns, terminal wealth, hashes,
   and audit events. It cannot trigger a recomputation.
 - **Setup** selects demo/network mode and an endpoint. Bearer tokens are held in

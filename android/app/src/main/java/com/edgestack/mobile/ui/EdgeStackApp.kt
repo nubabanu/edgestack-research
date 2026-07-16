@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.outlined.Assessment
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Settings
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.edgestack.mobile.data.MobileSnapshot
+import com.edgestack.mobile.data.HorizonPlan
 import com.edgestack.mobile.data.Recommendation
 import com.edgestack.mobile.data.SnapshotOrigin
 import com.edgestack.mobile.ui.theme.Coral
@@ -71,6 +73,7 @@ import java.util.Locale
 private enum class AppTab(val label: String, val icon: ImageVector) {
     PLAN("Plan", Icons.AutoMirrored.Outlined.ShowChart),
     BASKET("Basket", Icons.Outlined.Assessment),
+    HORIZONS("Horizons", Icons.Outlined.DateRange),
     EVIDENCE("Evidence", Icons.Outlined.Shield),
     SETUP("Setup", Icons.Outlined.Settings),
 }
@@ -155,8 +158,67 @@ private fun SnapshotContent(
     when (tab) {
         AppTab.PLAN -> PlanScreen(snapshot, state)
         AppTab.BASKET -> BasketScreen(snapshot)
+        AppTab.HORIZONS -> HorizonsScreen(snapshot)
         AppTab.EVIDENCE -> EvidenceScreen(snapshot)
         AppTab.SETUP -> SetupScreen(state, viewModel)
+    }
+}
+
+@Composable
+private fun HorizonsScreen(snapshot: MobileSnapshot) {
+    BaseList(snapshot) {
+        item {
+            Text("Decision horizons", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("A short-horizon signal cannot be stretched into a monthly or yearly forecast.", color = Fog)
+        }
+        items(snapshot.horizons, key = { it.horizon }) { plan ->
+            HorizonCard(plan)
+        }
+    }
+}
+
+@Composable
+private fun HorizonCard(plan: HorizonPlan) {
+    val available = plan.status == "CONDITIONAL_PAPER_SIGNAL"
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text(plan.horizon, color = Gold, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+                    Text(plan.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                }
+                Text(
+                    if (available) "CONDITIONAL" else "NO MODEL",
+                    modifier = Modifier
+                        .background(
+                            (if (available) Mint else Coral).copy(alpha = 0.14f),
+                            RoundedCornerShape(100.dp),
+                        )
+                        .padding(horizontal = 9.dp, vertical = 5.dp),
+                    color = if (available) Mint else Coral,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (plan.symbols.isNotEmpty()) {
+                Notice("COMPLETE BASKET · ${plan.symbols.joinToString(" · ")}", Mint)
+            } else {
+                Notice("NO STOCK RECOMMENDATION", Coral)
+            }
+            KeyValue("Holding period", plan.holdingPeriod)
+            HorizontalDivider(color = PanelSoft)
+            Text("WHEN TO ENTER", color = Gold, fontWeight = FontWeight.Bold)
+            Text(plan.entryRule, color = Fog)
+            Text("WHEN TO REVIEW", color = Gold, fontWeight = FontWeight.Bold)
+            Text(plan.reviewRule, color = Fog)
+            Text("WHEN TO EXIT", color = Gold, fontWeight = FontWeight.Bold)
+            Text(plan.exitRule, color = Fog)
+            SectionCard("Evidence boundary") { Text(plan.evidence, color = Fog) }
+            SectionCard("Reverse or cancel if") {
+                plan.invalidation.forEach { Text("• $it", color = Fog) }
+            }
+            Text("Unlock: ${plan.unlockRequirement}", color = if (available) Mint else Coral)
+        }
     }
 }
 

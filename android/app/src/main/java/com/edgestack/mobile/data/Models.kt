@@ -73,6 +73,22 @@ data class AuditItem(
 )
 
 @Serializable
+data class HorizonPlan(
+    val horizon: String,
+    val status: String,
+    val title: String,
+    @SerialName("holding_period") val holdingPeriod: String,
+    @SerialName("entry_rule") val entryRule: String,
+    @SerialName("review_rule") val reviewRule: String,
+    @SerialName("exit_rule") val exitRule: String,
+    @SerialName("recommendation_scope") val recommendationScope: String,
+    val symbols: List<String>,
+    val evidence: String,
+    val invalidation: List<String>,
+    @SerialName("unlock_requirement") val unlockRequirement: String,
+)
+
+@Serializable
 data class MobileSnapshot(
     val meta: ApiMeta,
     @SerialName("campaign_id") val campaignId: String,
@@ -87,10 +103,11 @@ data class MobileSnapshot(
     val skipped: List<Recommendation> = emptyList(),
     val holdout: HoldoutEvidence,
     val audit: List<AuditItem>,
+    val horizons: List<HorizonPlan>,
     val disclaimer: String,
 ) {
     fun validate(): MobileSnapshot {
-        require(meta.schemaVersion == "1.0") { "Unsupported mobile schema" }
+        require(meta.schemaVersion == "1.1") { "Unsupported mobile schema" }
         require(recommendations.map { it.rank } == (1..recommendations.size).toList()) {
             "Recommendation ranks are incomplete or reordered"
         }
@@ -104,6 +121,17 @@ data class MobileSnapshot(
             "Short recommendation emitted while shorts are disabled"
         }
         require(recommendations.all { it.confidenceOrdinal in 0..100 && it.suggestedShares >= 0 })
+        require(horizons.map { it.horizon } == listOf("WEEK", "MONTH", "YEAR")) {
+            "Horizon plans must contain WEEK, MONTH, YEAR in order"
+        }
+        require(
+            horizons.first().recommendationScope == "BASKET" &&
+                horizons.first().symbols == recommendations.map { it.symbol },
+        ) { "Weekly horizon must preserve the complete tested basket" }
+        require(
+            horizons.filter { it.status == "DATA_UNAVAILABLE" }
+                .all { it.recommendationScope == "NONE" && it.symbols.isEmpty() },
+        ) { "Unavailable horizons cannot emit stock recommendations" }
         return this
     }
 }

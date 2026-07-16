@@ -23,6 +23,11 @@ def test_demo_snapshot_is_strict_and_visibly_non_live(tmp_path: Path) -> None:
     assert "DEMO" in snapshot.watermark
     assert [item.rank for item in snapshot.recommendations] == [1, 2, 3, 4, 5]
     assert snapshot.portfolio.shorts_enabled is False
+    assert [item.horizon for item in snapshot.horizons] == ["WEEK", "MONTH", "YEAR"]
+    assert snapshot.horizons[0].symbols == ("IBM", "ERIE", "APP", "PNR", "PGR")
+    assert snapshot.horizons[1].status == "DATA_UNAVAILABLE"
+    assert snapshot.horizons[1].symbols == ()
+    assert snapshot.horizons[2].status == "DATA_UNAVAILABLE"
 
 
 def test_mobile_api_requires_constant_bearer_and_sets_evidence_headers(
@@ -51,7 +56,7 @@ def test_mobile_api_requires_constant_bearer_and_sets_evidence_headers(
     assert response.status_code == 200
     assert response.headers["etag"].startswith('"')
     assert response.headers["cache-control"] == "private, no-cache"
-    assert response.json()["meta"]["schema_version"] == "1.0"
+    assert response.json()["meta"]["schema_version"] == "1.1"
     assert "/orders" not in client.app.openapi()["paths"]
 
 
@@ -163,3 +168,12 @@ def test_sealed_campaign_artifacts_are_verified_and_normalized(tmp_path: Path) -
     assert snapshot.holdout.status == "PASS"
     assert snapshot.holdout.result_sha256
     assert snapshot.recommendations[0].symbol == "TEST"
+    assert snapshot.horizons[0].symbols == ("TEST",)
+    assert snapshot.horizons[1].recommendation_scope == "NONE"
+
+
+def test_unavailable_horizon_cannot_emit_a_stock(tmp_path: Path) -> None:
+    payload = MobileSnapshotService(tmp_path, demo=True).load().model_dump(mode="json")
+    payload["horizons"][1]["symbols"] = ["IBM"]
+    with pytest.raises(ValidationError, match="cannot emit"):
+        MobileSnapshot.model_validate(payload)

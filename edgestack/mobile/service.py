@@ -14,6 +14,7 @@ from edgestack.mobile.models import (
     AuditItem,
     EntryInstruction,
     HoldoutEvidence,
+    HorizonPlan,
     MobileRecommendation,
     MobileSnapshot,
     PortfolioSummary,
@@ -184,7 +185,65 @@ class MobileSnapshotService:
                     message="Sealed holdout evidence was replayed; no reevaluation occurred.",
                 ),
             ),
+            horizons=_horizon_plans(recommendations, entry, exit_),
         )
+
+
+def _horizon_plans(
+    recommendations: tuple[MobileRecommendation, ...],
+    entry: dict[str, Any],
+    exit_: dict[str, Any],
+) -> tuple[HorizonPlan, ...]:
+    symbols = tuple(item.symbol for item in recommendations)
+    return (
+        HorizonPlan(
+            horizon="WEEK",
+            status="CONDITIONAL_PAPER_SIGNAL",
+            title="Five-session reversal basket",
+            holding_period="Five earned close-to-close intervals",
+            entry_rule=(
+                f"Revalidate at 15:30-15:45 ET and submit the complete basket "
+                f"as MOC for {entry['session']}."
+            ),
+            review_rule="Refresh after every completed daily bar; confidence is ordinal, not a probability.",
+            exit_rule=f"Exit the complete basket MOC on {exit_['session']} unless a risk cancellation occurs.",
+            recommendation_scope="BASKET",
+            symbols=symbols,
+            evidence="Promoted five-day model with a sealed PASS holdout; individual ranks are not standalone forecasts.",
+            invalidation=tuple(map(str, entry["cancel_if"])),
+            unlock_requirement="Already unlocked only for the complete frozen basket and exact timing contract.",
+        ),
+        HorizonPlan(
+            horizon="MONTH",
+            status="DATA_UNAVAILABLE",
+            title="No validated monthly stock recommendation",
+            holding_period="Approximately 21 NYSE sessions",
+            entry_rule="Do not stretch the five-day reversal signal into a one-month trade.",
+            review_rule="Wait for an independently frozen monthly model and untouched forward evidence.",
+            exit_rule="No monthly exit is authorized because no monthly recommendation is emitted.",
+            recommendation_scope="NONE",
+            evidence="The promoted campaign did not validate a standalone 21-session stock-selection model.",
+            invalidation=(
+                "Any monthly ticker inferred from the weekly ranking is invalid.",
+            ),
+            unlock_requirement="Requires preregistration, costs, OOS validation, confirmation, freeze, and a new holdout.",
+        ),
+        HorizonPlan(
+            horizon="YEAR",
+            status="DATA_UNAVAILABLE",
+            title="No validated one-year stock recommendation",
+            holding_period="Approximately 252 NYSE sessions",
+            entry_rule="Do not use a five-day oversold move as a one-year investment thesis.",
+            review_rule="Require point-in-time fundamentals and a separately validated long-horizon model.",
+            exit_rule="No annual exit is authorized because no annual recommendation is emitted.",
+            recommendation_scope="NONE",
+            evidence="EdgeStack has no frozen promoted 252-session single-stock model in this campaign.",
+            invalidation=(
+                "Any annual ticker inferred from the weekly ranking is invalid.",
+            ),
+            unlock_requirement="Requires a new causal annual study, full cost/OOS gauntlet, freeze, and future holdout.",
+        ),
+    )
 
 
 def _mapping(path: Path) -> dict[str, Any]:

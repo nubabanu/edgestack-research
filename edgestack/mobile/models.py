@@ -19,7 +19,7 @@ class WireModel(BaseModel):
 class ApiMeta(WireModel):
     """Version and freshness metadata for one atomic snapshot."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     generated_at: datetime
     market_as_of: str
     source: str
@@ -88,6 +88,23 @@ class AuditItem(WireModel):
     message: str
 
 
+class HorizonPlan(WireModel):
+    """Evidence-aware availability and timing for one investment horizon."""
+
+    horizon: Literal["WEEK", "MONTH", "YEAR"]
+    status: Literal["CONDITIONAL_PAPER_SIGNAL", "DATA_UNAVAILABLE"]
+    title: str
+    holding_period: str
+    entry_rule: str
+    review_rule: str
+    exit_rule: str
+    recommendation_scope: Literal["BASKET", "NONE"]
+    symbols: tuple[str, ...] = ()
+    evidence: str
+    invalidation: tuple[str, ...]
+    unlock_requirement: str
+
+
 class MobileSnapshot(WireModel):
     """Atomic Android home-screen payload."""
 
@@ -104,6 +121,7 @@ class MobileSnapshot(WireModel):
     skipped: tuple[MobileRecommendation, ...] = ()
     holdout: HoldoutEvidence
     audit: tuple[AuditItem, ...]
+    horizons: tuple[HorizonPlan, ...]
     disclaimer: str = DISCLAIMER
 
     def model_post_init(self, __context: object) -> None:
@@ -119,3 +137,15 @@ class MobileSnapshot(WireModel):
             and not self.portfolio.shorts_enabled
         ):
             raise ValueError("short recommendation emitted while shorts are disabled")
+        if [plan.horizon for plan in self.horizons] != ["WEEK", "MONTH", "YEAR"]:
+            raise ValueError("mobile horizons must contain WEEK, MONTH, YEAR in order")
+        weekly = self.horizons[0]
+        symbols = tuple(item.symbol for item in self.recommendations)
+        if weekly.recommendation_scope != "BASKET" or weekly.symbols != symbols:
+            raise ValueError("weekly horizon must preserve the complete tested basket")
+        if any(
+            plan.status == "DATA_UNAVAILABLE"
+            and (plan.recommendation_scope != "NONE" or plan.symbols)
+            for plan in self.horizons
+        ):
+            raise ValueError("unavailable horizons cannot emit stock recommendations")
