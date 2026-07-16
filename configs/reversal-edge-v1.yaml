@@ -1,0 +1,127 @@
+campaign_id: reversal-edge-v1-20260715-001
+parent_campaign_id: full-stooq-literature-v2-20260715-001
+revision_context: POST_GRID_SELECTION_PRE_HOLDOUT
+
+data:
+  bars_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/data/bars.parquet
+  universe_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/data/universe.parquet
+  data_manifest_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/data/manifest.json
+  parent_metrics_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/reversal/v3/metrics.parquet
+  parent_specs_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/reversal/v3/specs.json
+  parent_net_returns_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/reversal/v3/net_returns.parquet
+  parent_gross_returns_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/reversal/v3/gross_returns.parquet
+  research_start: '1962-01-02'
+  preholdout_end_exclusive: '2023-07-14'
+  holdout_start: '2023-07-14'
+  holdout_end: '2026-07-14'
+
+strategy:
+  name: CURRENT_SP500_RAW_5D_REVERSAL_TOP5_HALF_GROSS
+  candidate_hypothesis_id: reversal_raw_topk-c3fd1877b67bd718
+  direction: LONG
+  universe: current S&P 500 equities
+  bias_tier: SURVIVORSHIP_BIASED
+  lookback_sessions: 5
+  top_k: 5
+  holding_sessions: 5
+  gross_exposure: 0.5
+  cohort_policy: equal-weight the five most negative trailing-five-session returns; average five daily cohorts
+  signal_available: after the completed daily bar
+  entry: MOC on the next NYSE session
+  first_earned_return: close-to-close return ending two sessions after the signal
+  cohort_exit: MOC after five earned close-to-close return intervals
+  benchmark: 50 percent SPY plus zero-return cash
+  enabled_overlays: []
+  short_leg: DISABLED_FAILED_VALIDATION
+
+selection_rationale:
+  operational_constraint: exactly five names matches the preregistered paper-assistant maximum
+  risk_constraint: 50 percent gross makes each new-account name at most 10 percent of capital
+  variant_constraint: raw reversal is the simplest declared five-name rule and requires no fitted beta model
+  searched_real_trials: 30
+  conservative_global_trial_count: 19197
+
+costs:
+  portfolio_capital_usd: 100000.0
+  commission_per_side_usd: 0.0
+  equity_full_spread_bps: 3.0
+  base_slippage_bps_per_fill: 1.0
+  impact_coefficient_bps: 10.0
+  impact_cap_bps_per_fill: 50.0
+  selection_penalty_bps_per_100pct_one_way_turnover: 1.0
+  sensitivity_multipliers: [0.5, 1.0, 2.0, 4.0]
+
+preholdout_validation:
+  minimum_daily_observations: 100
+  directed_hac_t_minimum: 3.4
+  global_bh_q: 0.05
+  dsr_probability_minimum: 0.95
+  conservative_global_trial_count: 19197
+  bootstrap_draws: 10000
+  bootstrap_seed: 20260715
+  stationary_average_block_sessions: 10.0
+  bootstrap_net_mean_lower_must_be_positive: true
+  benchmark_excess_hac_t_minimum: 2.0
+  walk_forward_min_train_years: 5
+  walk_forward_test_years: 1
+  walk_forward_step_years: 1
+  stitched_oos_hac_t_minimum: 2.0
+  positive_test_year_fraction_minimum: 0.5
+  stability_minimum: 0.75
+  recent_to_prior_minimum: 0.5
+  cpcv_groups: 6
+  cpcv_test_groups: 2
+  purge_sessions: 21
+  embargo_sessions: 21
+  side_pbo_maximum: 0.20
+  four_x_cost_net_mean_must_be_positive: true
+  spa_bootstrap_draws: 10000
+  reality_check_bootstrap_draws: 10000
+  family_test_seed: 20260715
+  family_p_value_maximum: 0.05
+  placebo_seeds: [20260716, 20260717]
+  zipline_version: 3.1.1
+  zipline_confirmation_start: '2000-01-01'
+  zipline_chunk_years: 2
+  zipline_capital_base_usd: 100000000.0
+  zipline_capital_purpose: numerical precision for integer-share independent confirmation only; not live sizing
+  zipline_tolerance_bps_per_trade: 1.0
+  zipline_known_calendar_exceptions:
+    - exception_id: XNYS_2005_06_01_SYSTEMS_CLOSE
+      session: '2005-06-01'
+      canonical_close_utc: '2005-06-01T19:56:00+00:00'
+      backend_close_utc: '2005-06-01T20:00:00+00:00'
+      expected_event_count: 10
+      chunk_start: '2004-01-02'
+      chunk_end: '2005-12-30'
+      zipline_backend: zipline-reloaded-3.1.1-in-memory-adjusted-ohlcv
+      zipline_version: '3.1.1'
+      canonical_calendar: pandas-market-calendars==5.4.0
+      backend_calendar: exchange-calendars==4.13.2
+      reason: NYSE trading halted four minutes early after a systems communications problem
+      source: https://www.washingtonpost.com/archive/business/2005/06/02/glitch-closes-nyse-four-minutes-early/38088a2c-9185-45e0-afa0-0bf829e7697e/
+
+holdout:
+  program_id: EDGESTACK_US_EQUITY_RESEARCH_V1
+  market: XNYS_US_EQUITIES
+  promotion_class: FINAL
+  global_scope: all models using canonical US-equity bars from 2023-07-14 through 2026-07-14
+  access_policy: ONE_GLOBAL_ATOMIC_EVALUATION
+  require_net_mean_positive: true
+  require_terminal_net_wealth_above_one: true
+  require_benchmark_excess_mean_positive: true
+  significance_required: false
+  replay_policy: sealed evidence only after first access
+
+action_policy:
+  live_capital: PAPER_ONLY
+  scan_time: '08:30 America/New_York'
+  entry_order: MOC
+  new_account_weight_per_name: 0.10
+  mature_daily_cohort_weight_per_name: 0.02
+  maximum_weight_per_name: 0.10
+  target_risk_fraction: 0.005
+  reference_stop: 2 ATR14
+  stop_status: RISK_REFERENCE_NOT_VALIDATED_ALPHA_OVERLAY
+  cancel_if: quote is stale, a bar is missing, the name is no longer in the current S&P 500, or the MOC cutoff is missed
+  no_chase_policy: wait for the next completed-bar scan

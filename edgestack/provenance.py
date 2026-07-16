@@ -55,14 +55,37 @@ def source_tree_sha256(root: str | Path) -> str:
         ".ruff_cache",
         "__pycache__",
     }
-    for path in sorted(item for item in base.rglob("*") if item.is_file()):
+    try:
+        listed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(base),
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout
+        candidates = [
+            base / item.decode("utf-8", errors="surrogateescape")
+            for item in listed.split(b"\0")
+            if item
+        ]
+    except (subprocess.SubprocessError, OSError):
+        candidates = [item for item in base.rglob("*") if item.is_file()]
+    for path in sorted(candidates):
         relative = path.relative_to(base)
         if relative.parts[0] in excluded_roots or excluded_parts.intersection(
             relative.parts
         ):
             continue
         digest.update(relative.as_posix().encode())
-        digest.update(path.read_bytes())
+        digest.update(path.read_bytes() if path.is_file() else b"<MISSING>")
     return digest.hexdigest()
 
 

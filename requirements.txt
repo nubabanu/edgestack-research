@@ -547,8 +547,13 @@ numpy==2.4.6 \
     #   scipy
     #   statsmodels
     #   tables
+    #   xgboost
     #   yfinance
     #   zipline-reloaded
+nvidia-nccl-cu12==2.30.7 ; sys_platform == 'linux' \
+    --hash=sha256:03ecd776fd1d58fd2c9a0a687dcf8db9ecd0057382dba646fa3d65786d4a9ea1 \
+    --hash=sha256:8ce1b8213f61f2bfac132e6df890af6450b77cbd140c6ce4e98cb0c2d8e678c9
+    # via xgboost
 packaging==26.2 \
     --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e \
     --hash=sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661
@@ -834,6 +839,7 @@ scipy==1.18.0 \
     #   empyrical-reloaded
     #   scikit-learn
     #   statsmodels
+    #   xgboost
     #   zipline-reloaded
 setuptools==83.0.0 \
     --hash=sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef \
@@ -992,6 +998,14 @@ websockets==16.1 \
     --hash=sha256:d0fb4b46f121eccd539353baebd1083a8767a9a351109453d1d1caecd1ba40c2 \
     --hash=sha256:ff9b000064b88787ba9f7a3cb2af2b68a658ca5aad76458a46469e7124b678a0
     # via yfinance
+xgboost==3.3.0 \
+    --hash=sha256:07688a377046b8640897b62421150bf73c6cc7101823474ec6ad08b93290f587 \
+    --hash=sha256:58bcb8a4cace648cdab7b94fa4f16d2c9ff26d90dd4d26907168106fa06d8746 \
+    --hash=sha256:624a83aeb1e7ba081719795db179f4ce6fff12e79de05cd9baf15ee48fd22f0e \
+    --hash=sha256:af7cea10f418b7c251ddc8da440f57bdab2990b5fc9f74a35a92b0f150ea287d \
+    --hash=sha256:b06057f6a018fc04e6b3e0c15568ca636b8151a5b5f333478e500fcaf4fc7594 \
+    --hash=sha256:f59edaf28eccd1c519788607c72ed907ee6cedfa933d706620bc1612d24b354e
+    # via edgestack
 yfinance==0.2.66 \
     --hash=sha256:511a1a40a687f277aae3a02543009a8aeaa292fce5509671f58915078aebb5c7 \
     --hash=sha256:fae354cc1649109444b2c84194724afcc52c2a7799551ce44c739424ded6af9c

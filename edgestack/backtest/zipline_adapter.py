@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -146,14 +147,26 @@ def confirm_with_zipline(
     }
 
     engine = create_engine("sqlite://")
+    first_traded: list[pd.Timestamp] = []
+    last_traded: list[pd.Timestamp] = []
+    for symbol in data.symbols:
+        values = data.close[symbol].dropna()
+        if values.empty:
+            raise ValueError(f"canonical confirmation asset has no prices: {symbol}")
+        first = pd.Timestamp(values.index[0])
+        # The global padding row duplicates the first canonical price solely to
+        # let an already-live asset submit its first causal order.  Later IPOs
+        # retain their real first valid session and are not backfilled.
+        first_traded.append(padding if first == dates[0] else first)
+        last_traded.append(pd.Timestamp(values.index[-1]))
     equities = pd.DataFrame(
         {
             "symbol": list(data.symbols),
             "asset_name": list(data.symbols),
-            "start_date": padding,
-            "end_date": dates[-1],
-            "first_traded": padding,
-            "auto_close_date": dates[-1] + pd.Timedelta(days=10),
+            "start_date": first_traded,
+            "end_date": last_traded,
+            "first_traded": first_traded,
+            "auto_close_date": [value + pd.Timedelta(days=10) for value in last_traded],
             "exchange": "XNYS",
         },
         index=sids,
@@ -208,7 +221,17 @@ def confirm_with_zipline(
                 asset = context.assets[int(column)]
                 if not bar_data.can_trade(asset):
                     continue
-                context.order_target_percent(asset, float(desired[column]))
+                try:
+                    context.order_target_percent(asset, float(desired[column]))
+                except OverflowError as error:
+                    raise OverflowError(
+                        "Zipline share guard while targeting "
+                        f"symbol={getattr(asset, 'symbol', asset)} "
+                        f"session={bar_data.current_dt} "
+                        f"target={float(desired[column]):.12g} "
+                        f"price={bar_data.current(asset, 'price')} "
+                        f"portfolio_value={context.portfolio.portfolio_value:.12g}"
+                    ) from error
             context.previous_target = desired
         context.row += 1
 
@@ -230,7 +253,13 @@ def confirm_with_zipline(
 
     expected_times = _expected_fill_times(data, spec.session)
     actual_times = _transaction_times(performance)
+    expected_events = _expected_fill_events(data, spec.session)
+    actual_events = _transaction_events(performance)
     timestamps_match = actual_times == expected_times
+    missing_events = list(
+        (Counter(expected_events) - Counter(actual_events)).elements()
+    )
+    extra_events = list((Counter(actual_events) - Counter(expected_events)).elements())
     transaction_count = len(actual_times)
     expected_count = len(expected_times)
     actual_positions = _zipline_return_positions(
@@ -269,7 +298,16 @@ def confirm_with_zipline(
             f"transaction count differs ({transaction_count} vs {expected_count})"
         )
     if not timestamps_match:
-        reasons.append("transaction timestamps differ")
+        missing_times = list(
+            (Counter(expected_times) - Counter(actual_times)).elements()
+        )
+        extra_times = list((Counter(actual_times) - Counter(expected_times)).elements())
+        reasons.append(
+            "transaction timestamps differ "
+            f"(missing={missing_times[:3]}, extra={extra_times[:3]}, "
+            f"missing_events={missing_events[:3]}, "
+            f"extra_events={extra_events[:3]})"
+        )
     if difference > tolerance_bps_per_trade:
         reasons.append(f"net mean differs by {difference:.6g} bps per transaction")
     return ConfirmationResult(
@@ -283,6 +321,13 @@ def confirm_with_zipline(
         passed,
         backend="zipline-reloaded-3.1.1-in-memory-adjusted-ohlcv",
         reason="agreement within tolerance" if passed else "; ".join(reasons),
+        missing_fill_events=tuple(
+            (int(sid), timestamp.isoformat()) for sid, timestamp in missing_events
+        ),
+        extra_fill_events=tuple(
+            (int(sid), timestamp.isoformat()) for sid, timestamp in extra_events
+        ),
+        convention_supported=convention_supported,
     )
 
 
@@ -354,6 +399,39 @@ def _transaction_times(performance: pd.DataFrame) -> list[pd.Timestamp]:
         for transaction in transactions:
             output.append(_utc(transaction["dt"]))
     return sorted(output)
+
+
+def _expected_fill_events(
+    data: ZiplineCanonicalData, session: Session
+) -> list[tuple[int, pd.Timestamp]]:
+    """Return expected ``(column, timestamp)`` pairs for diagnostics."""
+
+    targets = np.asarray(data.target_positions, dtype=float)
+    previous = np.vstack((np.zeros((1, targets.shape[1])), targets[:-1]))
+    changed = ~np.isclose(targets, previous, rtol=0.0, atol=1e-12, equal_nan=True)
+    output: list[tuple[int, pd.Timestamp]] = []
+    for row, column in np.argwhere(changed):
+        timestamp = (
+            data.market_open[row]
+            if session is Session.INTRADAY
+            else data.market_close[row - 1]
+        )
+        output.append((int(column), _utc(timestamp)))
+    return sorted(output, key=lambda item: (item[1], item[0]))
+
+
+def _transaction_events(
+    performance: pd.DataFrame,
+) -> list[tuple[int, pd.Timestamp]]:
+    """Return actual ``(sid, timestamp)`` pairs for diagnostics."""
+
+    output: list[tuple[int, pd.Timestamp]] = []
+    for transactions in performance["transactions"]:
+        for transaction in transactions:
+            raw_sid = transaction["sid"]
+            sid = int(getattr(raw_sid, "sid", raw_sid))
+            output.append((sid, _utc(transaction["dt"])))
+    return sorted(output, key=lambda item: (item[1], item[0]))
 
 
 def _zipline_return_positions(

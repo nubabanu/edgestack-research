@@ -23,6 +23,21 @@ class HoldoutAccessRecord:
     result_sha256: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ExperimentRecord:
+    """Durable state for one uniquely identified model/rule experiment."""
+
+    study_id: str
+    trial_id: str
+    status: str
+    device: str
+    spec: dict[str, Any]
+    metrics: dict[str, Any] | None
+    created_at: datetime
+    completed_at: datetime | None
+    error: str | None
+
+
 class Catalog:
     """Crash-safe metadata catalog using WAL mode."""
 
@@ -72,6 +87,19 @@ class Catalog:
                     accessed_at TEXT NOT NULL,
                     result_sha256 TEXT
                 );
+                CREATE TABLE IF NOT EXISTS research_experiments (
+                    trial_id TEXT PRIMARY KEY,
+                    study_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    device TEXT NOT NULL,
+                    spec_json TEXT NOT NULL,
+                    metrics_json TEXT,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    error TEXT
+                );
+                CREATE INDEX IF NOT EXISTS research_experiments_study
+                    ON research_experiments(study_id, status, trial_id);
                 """
             )
 
@@ -247,3 +275,101 @@ class Catalog:
                     "UPDATE holdout_access SET result_sha256=? WHERE campaign_id=?",
                     (result_sha256, campaign_id),
                 )
+
+    def claim_experiment(
+        self,
+        study_id: str,
+        trial_id: str,
+        spec: dict[str, Any],
+        *,
+        device: str,
+    ) -> bool:
+        """Atomically claim a unique experiment, preventing duplicate GPU work."""
+
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """INSERT OR IGNORE INTO research_experiments(
+                    trial_id, study_id, status, device, spec_json, created_at
+                ) VALUES (?, ?, 'RUNNING', ?, ?, ?)""",
+                (
+                    trial_id,
+                    study_id,
+                    device,
+                    json.dumps(
+                        spec, sort_keys=True, separators=(",", ":"), default=str
+                    ),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def complete_experiment(self, trial_id: str, metrics: dict[str, Any]) -> None:
+        """Seal one experiment's metrics; completed trials are immutable."""
+
+        encoded = json.dumps(
+            metrics, sort_keys=True, separators=(",", ":"), default=str
+        )
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT status, metrics_json FROM research_experiments WHERE trial_id=?",
+                (trial_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("experiment was not claimed")
+            if row["status"] == "COMPLETE":
+                if row["metrics_json"] != encoded:
+                    raise RuntimeError("completed experiment metrics are immutable")
+                return
+            if row["status"] != "RUNNING":
+                raise RuntimeError("only a running experiment can be completed")
+            connection.execute(
+                """UPDATE research_experiments
+                SET status='COMPLETE', metrics_json=?, completed_at=?, error=NULL
+                WHERE trial_id=?""",
+                (encoded, datetime.now(UTC).isoformat(), trial_id),
+            )
+
+    def fail_experiment(self, trial_id: str, error: str) -> None:
+        """Persist a failed attempt without making it silently retry as new work."""
+
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """UPDATE research_experiments
+                SET status='FAILED', completed_at=?, error=?
+                WHERE trial_id=? AND status='RUNNING'""",
+                (datetime.now(UTC).isoformat(), error, trial_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("only a running experiment can fail")
+
+    def experiments(self, study_id: str) -> tuple[ExperimentRecord, ...]:
+        """List a study's trials in stable identity order."""
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                """SELECT * FROM research_experiments
+                WHERE study_id=? ORDER BY trial_id""",
+                (study_id,),
+            ).fetchall()
+        return tuple(
+            ExperimentRecord(
+                study_id=str(row["study_id"]),
+                trial_id=str(row["trial_id"]),
+                status=str(row["status"]),
+                device=str(row["device"]),
+                spec=json.loads(str(row["spec_json"])),
+                metrics=(
+                    json.loads(str(row["metrics_json"]))
+                    if row["metrics_json"] is not None
+                    else None
+                ),
+                created_at=datetime.fromisoformat(str(row["created_at"])),
+                completed_at=(
+                    datetime.fromisoformat(str(row["completed_at"]))
+                    if row["completed_at"] is not None
+                    else None
+                ),
+                error=str(row["error"]) if row["error"] is not None else None,
+            )
+            for row in rows
+        )

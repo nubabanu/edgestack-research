@@ -55,6 +55,30 @@ def test_psr_and_dsr_penalize_trials() -> None:
     assert dsr_many < dsr_one
 
 
+def test_dsr_empirical_trials_estimate_variance_around_the_zero_null() -> None:
+    trials = np.array([0.10, 0.20, 0.30])
+    empirical = deflated_sharpe_ratio(
+        0.35, n_observations=500, n_trials=3, trial_sharpes=trials
+    )
+    zero_null = deflated_sharpe_ratio(
+        0.35,
+        n_observations=500,
+        n_trials=3,
+        trial_sharpe_std=float(trials.std(ddof=1)),
+        trial_sharpe_mean=0.0,
+    )
+    shifted_null = deflated_sharpe_ratio(
+        0.35,
+        n_observations=500,
+        n_trials=3,
+        trial_sharpe_std=float(trials.std(ddof=1)),
+        trial_sharpe_mean=float(trials.mean()),
+    )
+
+    assert empirical == zero_null
+    assert empirical > shifted_null
+
+
 def test_reality_checks_detect_strong_strategy() -> None:
     rng = np.random.default_rng(12)
     returns = rng.normal(0.0, 0.01, size=(500, 3))

@@ -23,6 +23,7 @@ edgestack/
   entrytiming/   governed indicators, timers, regimes, stops, interactions
   live/          paper scanner, monitor, SQLite outbox/ledger, scheduling
   report/        daily rankings and output formats
+  reversal/      top-K rule grid, residual features, rankers, purged studies
   storage/       immutable artifacts and SQLite campaign catalog
   pipeline/      hard gates and single-use holdout ceremony
   config.py      strict typed YAML configuration
@@ -36,7 +37,7 @@ tests/           deterministic unit, integration, causal, and external tests
 
 ```powershell
 py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install -e ".[dev,live,confirm]"
+.venv\Scripts\python -m pip install -e ".[dev,live,confirm,ml]"
 .venv\Scripts\edgestack --help
 ```
 
@@ -106,6 +107,34 @@ The exact resolved configuration is part of a campaign identity, so pass the sam
 `--config` file to every command. The final holdout command is intentionally
 one-use: inspect the provisional report before invoking it.
 
+### Selection-aware reversal study
+
+The opt-in reversal protocol evaluates the portfolio breadth actually intended
+for trading instead of treating a 50-name backtest as evidence for five names. It
+predeclares `K = 3, 5, 10, 20, 50`, raw/sector-neutral/market-sector-residual
+signals, and long/short sides as 30 distinct trials. It uses one-sided directed
+FDR, side-specific DSR and CPCV/PBO, expanding walk-forward tests, five-year decay
+analysis, baseline costs, and next-eligible-close execution.
+
+```powershell
+edgestack reversal-study `
+  --config configs/reversal-study.yaml `
+  --campaign <id>
+
+# Optional purged ridge, elastic-net, LambdaMART, and meta-label diagnostics.
+edgestack reversal-study `
+  --config configs/reversal-study.yaml `
+  --campaign <new-id> --run-ml --gpu
+```
+
+GPU trials are assigned deterministically to independent devices; two 48-GB cards
+are not represented as one 96-GB pool. If CUDA is unavailable, omit `--gpu`.
+Historical 15:45 quotes, point-in-time constituents, timestamped earnings, and
+borrow records are never inferred from daily closing bars. Without them, the
+study remains a visibly survivorship-biased, non-promotable diagnostic even when
+its numerical rule tests pass. See
+[selection-aware reversal research](docs/reversal-research.md).
+
 ## Data keys and paper notifications
 
 No key is required for the selected Stooq-to-Yahoo whole-series fallback. For the
@@ -158,6 +187,7 @@ and most standalone technical overlays should remain disabled. These are
 expectations, never substituted for the campaign's actual frozen evidence.
 
 See [architecture](docs/architecture.md), [methodology](docs/methodology.md),
+[selection-aware reversal research](docs/reversal-research.md),
 [report interpretation](docs/report-interpretation.md), and
 [references](REFERENCES.md) for the design, formulas, frozen gates, limitations,
 and primary literature.

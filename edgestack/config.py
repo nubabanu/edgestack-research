@@ -254,6 +254,81 @@ class EntryTimingConfig(StrictModel):
     recency_weighting: bool = False
 
 
+class ReversalResearchConfig(StrictModel):
+    """Opt-in, selection-aware short-horizon reversal research protocol.
+
+    This protocol is deliberately separate from the frozen V1/V2 campaign
+    grids.  Enabling it declares every breadth and signal variant up front so
+    choosing a five-name portfolio cannot silently change the strategy after
+    results are observed.
+    """
+
+    enabled: bool = False
+    study_version: Literal["v3"] = "v3"
+    top_k: tuple[int, ...] = (3, 5, 10, 20, 50)
+    variants: tuple[Literal["raw", "sector_neutral", "market_sector_residual"], ...] = (
+        "raw",
+        "sector_neutral",
+        "market_sector_residual",
+    )
+    lookback_sessions: int = 5
+    holding_sessions: int = 5
+    beta_window: int = 252
+    beta_min_observations: int = 126
+    residual_vol_window: int = 20
+    decision_time: str = "15:45"
+    loc_atr_fraction: float = 0.25
+    stop_atr_multiple: float = 2.0
+    event_exclusion_sessions: int = 5
+    preentry_reversal_atr_max: float = 1.0
+    require_point_in_time_universe: bool = True
+    allow_survivorship_biased_diagnostic: bool = False
+    gpu_devices: tuple[int, ...] = (0, 1)
+
+    @field_validator("decision_time")
+    @classmethod
+    def validate_decision_time(cls, value: str) -> str:
+        """Require an explicit regular-session HH:MM decision timestamp."""
+
+        import datetime as dt
+
+        parsed = dt.datetime.strptime(value, "%H:%M").time()
+        if not dt.time(9, 30) <= parsed < dt.time(16, 0):
+            raise ValueError("decision_time must be in the 09:30-15:59 ET session")
+        return value
+
+    @model_validator(mode="after")
+    def validate_protocol(self) -> ReversalResearchConfig:
+        """Reject grids that could create hidden or nonsensical trials."""
+
+        if (
+            not self.top_k
+            or tuple(sorted(set(self.top_k))) != self.top_k
+            or any(value < 1 for value in self.top_k)
+        ):
+            raise ValueError("top_k must contain unique, positive, sorted values")
+        if not self.variants or len(set(self.variants)) != len(self.variants):
+            raise ValueError("variants must be non-empty and unique")
+        if self.lookback_sessions < 1 or self.holding_sessions < 1:
+            raise ValueError("lookback and holding sessions must be positive")
+        if not 2 <= self.beta_min_observations <= self.beta_window:
+            raise ValueError("beta_min_observations must be in [2, beta_window]")
+        if self.residual_vol_window < 2:
+            raise ValueError("residual_vol_window must be at least two")
+        if (
+            self.loc_atr_fraction <= 0.0
+            or self.stop_atr_multiple <= 0.0
+            or self.preentry_reversal_atr_max <= 0.0
+            or self.event_exclusion_sessions < 0
+        ):
+            raise ValueError("execution thresholds must be positive and causal")
+        if not self.gpu_devices or any(device < 0 for device in self.gpu_devices):
+            raise ValueError("gpu_devices must contain non-negative device indices")
+        if len(set(self.gpu_devices)) != len(self.gpu_devices):
+            raise ValueError("gpu_devices must be unique")
+        return self
+
+
 class LiveConfig(StrictModel):
     """Paper-assistant scheduling and risk settings."""
 
@@ -294,6 +369,7 @@ class EdgeStackConfig(StrictModel):
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
     costs: CostConfig = Field(default_factory=CostConfig)
     entrytiming: EntryTimingConfig = Field(default_factory=EntryTimingConfig)
+    reversal: ReversalResearchConfig = Field(default_factory=ReversalResearchConfig)
     live: LiveConfig = Field(default_factory=LiveConfig)
 
     @model_validator(mode="after")

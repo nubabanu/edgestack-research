@@ -40,6 +40,9 @@ class ConfirmationResult:
     passed: bool
     backend: str = "independent_event_loop"
     reason: str = ""
+    missing_fill_events: tuple[tuple[int, str], ...] = ()
+    extra_fill_events: tuple[tuple[int, str], ...] = ()
+    convention_supported: bool = True
 
 
 @dataclass(frozen=True, slots=True)

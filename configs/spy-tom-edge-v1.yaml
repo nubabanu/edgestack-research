@@ -1,0 +1,70 @@
+campaign_id: spy-tom-edge-v1-20260715-001
+parent_campaign_id: full-stooq-literature-v2-20260715-001
+revision_context: POST_REPLICATION_PRE_HOLDOUT
+
+data:
+  bars_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/data/bars.parquet
+  universe_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/data/universe.parquet
+  data_manifest_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/data/manifest.json
+  replication_evidence_path: artifacts/campaigns/full-stooq-literature-v2-20260715-001/replication/evidence.json
+  symbol: SPY
+  return_field: adjusted_close
+  preholdout_end_exclusive: '2023-07-14'
+  holdout_start: '2023-07-14'
+  holdout_end: '2026-07-14'
+
+strategy:
+  name: SPY_TURN_OF_MONTH_LAST1_FIRST3
+  literature: McConnell and Xu (2008), Financial Analysts Journal, doi:10.2469/faj.v64.n2.11
+  direction: LONG
+  signal: deterministic NYSE calendar only
+  signal_available: '08:30 America/New_York on the entry session'
+  entry: MOC on the NYSE session immediately before the final session of each month
+  exposure: final NYSE session of the month and first three NYSE sessions of the next month
+  exit: MOC on the third NYSE session of the next month
+  allocation_usd: 10000.0
+  paper_portfolio_usd: 100000.0
+  maximum_gross_leverage: 1.0
+  enabled_overlays: []
+  filters: []
+
+costs:
+  commission_per_side_usd: 0.0
+  etf_full_spread_bps: 1.0
+  base_slippage_bps_per_fill: 1.0
+  impact_coefficient_bps: 10.0
+  impact_cap_bps_per_fill: 50.0
+  selection_penalty_bps_per_100pct_one_way_turnover: 1.0
+  adv_floor_usd: 1000000.0
+  sensitivity_multipliers: [0.5, 1.0, 2.0, 4.0]
+
+preholdout_validation:
+  minimum_episodes: 100
+  full_sample_one_sided_hac_t_minimum: 2.0
+  bootstrap_draws: 10000
+  bootstrap_seed: 20260715
+  stationary_average_block_episodes: 10.0
+  bootstrap_mean_ci_lower_must_be_positive: true
+  fixed_eras:
+    - {name: PRE_PUBLICATION, start: '1993-01-01', end: '2007-12-31'}
+    - {name: POST_PUBLICATION_1, start: '2008-01-01', end: '2015-12-31'}
+    - {name: RECENT_CONFIRMATION, start: '2016-01-01', end: '2023-07-13'}
+  every_era_mean_must_be_positive: true
+  positive_year_fraction_minimum: 0.5
+  recent_to_prior_era_median_minimum: 0.5
+  four_x_cost_mean_must_be_positive: true
+  parent_turn_of_month_replication_must_pass: true
+
+holdout:
+  access_policy: ONE_ATOMIC_EVALUATION
+  acceptance: baseline net episode mean must be strictly positive
+  significance_required: false
+  replay_policy: stored evidence only after first access
+
+action_policy:
+  live_capital: PAPER_ONLY
+  order_type: MOC
+  size_rule: floor(min(10000 USD, 10 percent of paper equity) / entry price)
+  exit_rule: fixed MOC exit on the third NYSE session of the next month
+  stop_overlay: DISABLED_NOT_VALIDATED
+  cancel_if: market is closed, SPY quote is stale, or MOC order cannot be submitted before broker cutoff

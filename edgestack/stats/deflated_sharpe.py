@@ -90,17 +90,21 @@ def deflated_sharpe_ratio(
     trial_sharpe_std: float | None = None,
     trial_sharpe_mean: float = 0.0,
 ) -> float:
-    """Return PSR against the expected best Sharpe from multiple trials."""
+    """Return PSR against the expected best Sharpe from multiple trials.
+
+    When empirical trial Sharpes are supplied, their dispersion estimates the
+    selection threshold's variance.  Their sample mean does not replace the
+    declared null (zero by default); doing so would test against the observed
+    strategy-class performance instead of deflating selection under the null.
+    """
 
     if trial_sharpes is not None:
         trials = np.asarray(trial_sharpes, dtype=float)
         trials = trials[np.isfinite(trials)]
         if trials.size > 1:
             trial_sharpe_std = float(trials.std(ddof=1))
-            trial_sharpe_mean = float(trials.mean())
         elif trials.size == 1:
             trial_sharpe_std = 0.0
-            trial_sharpe_mean = float(trials[0])
         else:
             raise ValueError("trial_sharpes contains no finite observations")
     if trial_sharpe_std is None:

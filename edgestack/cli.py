@@ -93,6 +93,39 @@ def discover(
     _run_phase("discover", campaign, config)
 
 
+@app.command("reversal-study")
+def reversal_study(
+    campaign: Annotated[str, typer.Option("--campaign")],
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/reversal-study.yaml"),
+    run_ml: Annotated[
+        bool,
+        typer.Option(
+            "--run-ml",
+            help="Also run purged ridge/elastic-net/XGBoost rank diagnostics.",
+        ),
+    ] = False,
+    gpu: Annotated[
+        bool,
+        typer.Option(
+            "--gpu",
+            help="Assign XGBoost trials across the configured independent CUDA devices.",
+        ),
+    ] = False,
+) -> None:
+    """Run the opt-in, non-holdout top-K and residual-reversal study."""
+
+    from edgestack.pipeline.runner import CampaignRunner
+
+    if gpu and not run_ml:
+        raise typer.BadParameter("--gpu requires --run-ml")
+    runner = CampaignRunner.open(load_config(config), campaign)
+    result = runner.reversal_research(run_ml=run_ml, use_gpu=gpu)
+    console.print(f"reversal-study: {result.status.value} — {result.summary}")
+    _exit_on_failed_gate(result.status)
+
+
 @app.command()
 def validate(
     campaign: Annotated[str, typer.Option("--campaign")],

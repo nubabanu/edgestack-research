@@ -64,6 +64,9 @@ from edgestack.provenance import (
     sha256_file,
     source_tree_sha256,
 )
+from edgestack.reversal.dataset import build_cross_sectional_dataset
+from edgestack.reversal.portfolio import run_reversal_grid
+from edgestack.reversal.study import default_model_specs, run_model_study
 from edgestack.scoring.stacking import StackResult, build_stack
 from edgestack.stats.bootstrap import stationary_bootstrap_ci
 from edgestack.stats.deflated_sharpe import deflated_sharpe_ratio
@@ -187,7 +190,15 @@ class CampaignRunner:
             and "evidence_protocol" not in manifest
             and manifest.get("config_sha256") == legacy_expected
         )
-        if manifest.get("config_sha256") != expected and not legacy_match:
+        extension_payload = config.model_dump(mode="json")
+        extension_payload.pop("reversal", None)
+        extension_expected = canonical_sha256(extension_payload)
+        extension_match = manifest.get("config_sha256") == extension_expected
+        if (
+            manifest.get("config_sha256") != expected
+            and not legacy_match
+            and not extension_match
+        ):
             raise RuntimeError(
                 "campaign config hash differs; use the exact frozen config or create a new campaign"
             )
@@ -434,6 +445,258 @@ class CampaignRunner:
                 evidence,
                 blocked=True,
             )
+
+    def reversal_research(
+        self, *, run_ml: bool = False, use_gpu: bool = False
+    ) -> GateResult:
+        """Run the opt-in top-K/reversal-model study without opening holdout data."""
+
+        if run_ml:
+            rule_result = self.reversal_research(run_ml=False)
+            if rule_result.status is not GateStatus.PASS:
+                return rule_result
+            return self._reversal_model_study(use_gpu=use_gpu)
+        version = self.config.reversal.study_version
+        phase = f"reversal_research_{version}"
+        artifact_root = f"reversal/{version}"
+        prior = self._prior(phase)
+        if prior is not None:
+            return prior
+        self.catalog.require_passed(self.campaign_id, ("data", "replication"))
+        if not self.config.reversal.enabled:
+            raise RuntimeError("reversal research is not enabled in the frozen config")
+        try:
+            bars, _, manifest = self._load_data()
+            prepared = self._prepared(bars, manifest, end=self.holdout_start)
+            grid = run_reversal_grid(
+                prepared,
+                self.config.reversal,
+                cost_model=CostModel(self.config.costs),
+                membership=None,
+                minimum_observations=self.config.grid.min_observations,
+                directed_t_threshold=(
+                    3.0
+                    if self.config.protocol.version == "FROZEN_V1"
+                    else self.config.protocol.cross_sectional_t_threshold
+                ),
+                fdr_q=self.config.stats.fdr_q,
+                dsr_threshold=self.config.stats.dsr_probability,
+                cpcv_groups=self.config.validation.cpcv_groups,
+                cpcv_test_groups=self.config.validation.cpcv_test_groups,
+                purge=self.config.validation.purge_sessions,
+                embargo=self.config.validation.embargo_sessions,
+                min_train_years=self.config.validation.min_train_years,
+                test_years=self.config.validation.test_years,
+                step_years=self.config.validation.step_years,
+                oos_t_threshold=self.config.validation.oos_t,
+                required_positive_fraction=(
+                    self.config.validation.oos_positive_fraction
+                ),
+                rolling_years=self.config.validation.rolling_years,
+                stability_min=self.config.validation.stability_min,
+                cost_multipliers=self.config.costs.sensitivity_multipliers,
+            )
+            self._write_parquet(
+                f"reversal_grid_metrics_{version}",
+                f"{artifact_root}/metrics.parquet",
+                grid.metrics,
+            )
+            self._write_parquet(
+                f"reversal_grid_net_returns_{version}",
+                f"{artifact_root}/net_returns.parquet",
+                grid.net_returns.rename_axis("session").reset_index(),
+            )
+            self._write_parquet(
+                f"reversal_grid_gross_returns_{version}",
+                f"{artifact_root}/gross_returns.parquet",
+                grid.gross_returns.rename_axis("session").reset_index(),
+            )
+            self._write_json(
+                f"reversal_grid_specs_{version}",
+                f"{artifact_root}/specs.json",
+                canonical_spec_payload(grid.specs),
+            )
+            research_years = pd.DatetimeIndex(grid.net_returns.index).year
+            annual_returns = (
+                grid.net_returns.groupby(research_years)
+                .agg(_compounded_return)
+                .rename_axis("year")
+                .reset_index()
+            )
+            self._write_parquet(
+                f"reversal_grid_annual_returns_{version}",
+                f"{artifact_root}/annual_returns.parquet",
+                annual_returns,
+            )
+            model_summary: dict[str, Any] = {"executed": False}
+            evidence = {
+                "study_version": version,
+                "declared_top_k": list(self.config.reversal.top_k),
+                "declared_variants": list(self.config.reversal.variants),
+                "declared_grid_trials": grid.trial_count,
+                "discovery_survivors": int(grid.metrics["passes_discovery"].sum()),
+                "rule_validation_survivors": int(
+                    grid.metrics["passes_rule_validation"].sum()
+                ),
+                "candidate_family_pbo": grid.pbo.pbo,
+                "pbo_defined": grid.pbo.defined,
+                "pbo_by_side": {
+                    side: {
+                        "pbo": result.pbo,
+                        "defined": result.defined,
+                        "splits": result.n_splits,
+                        "reason": result.reason,
+                    }
+                    for side, result in grid.pbo_by_side.items()
+                },
+                "bias_tier": grid.bias_tier,
+                "holdout_excluded_from_research": True,
+                "research_end_exclusive": self.holdout_start.isoformat(),
+                "analysis_provenance": self._reversal_analysis_provenance(manifest),
+                "model_study": model_summary,
+                "promotion_eligible": False,
+                "promotion_blockers": [
+                    (
+                        "current-membership universe is survivorship biased"
+                        if grid.bias_tier == "SURVIVORSHIP_BIASED"
+                        else "outer validation and untouched holdout remain required"
+                    ),
+                    "historical 15:45 quotes, earnings availability, and borrow data are absent",
+                ],
+                "disclaimer": DISCLAIMER,
+            }
+            self._write_json(
+                f"reversal_research_summary_{version}",
+                f"{artifact_root}/summary.json",
+                evidence,
+            )
+            return self._record_gate(
+                phase,
+                True,
+                "selection-aware reversal study executed as a non-promotable diagnostic",
+                evidence,
+            )
+        except Exception as error:
+            evidence = self._diagnostic(phase, error)
+            return self._record_gate(
+                phase,
+                False,
+                "reversal research execution failed and was frozen as a diagnostic",
+                evidence,
+                blocked=True,
+            )
+
+    def _reversal_model_study(self, *, use_gpu: bool) -> GateResult:
+        """Run the separately gated purged ML diagnostics after the rule grid."""
+
+        version = self.config.reversal.study_version
+        phase = f"reversal_model_study_{version}"
+        artifact_root = f"reversal/{version}"
+        prior = self._prior(phase)
+        if prior is not None:
+            return prior
+        self.catalog.require_passed(
+            self.campaign_id,
+            ("data", "replication", f"reversal_research_{version}"),
+        )
+        try:
+            bars, _, manifest = self._load_data()
+            prepared = self._prepared(bars, manifest, end=self.holdout_start)
+            dataset = build_cross_sectional_dataset(
+                prepared,
+                self.config.reversal,
+                membership=None,
+                short_borrow_annual=self.config.costs.easy_borrow_annual,
+            )
+            specs = default_model_specs(dataset, seed=self.config.stats.seed)
+            study = run_model_study(
+                dataset,
+                specs,
+                catalog=self.catalog,
+                study_id=f"{self.campaign_id}-reversal-ml-{version}",
+                use_gpu=use_gpu,
+                gpu_devices=self.config.reversal.gpu_devices,
+                min_train_years=self.config.validation.min_train_years,
+                test_years=self.config.validation.test_years,
+                step_years=self.config.validation.step_years,
+                purge_sessions=max(
+                    self.config.reversal.holding_sessions,
+                    self.config.validation.purge_sessions,
+                ),
+                diagnostic_top_k=5,
+            )
+            persisted_metrics = study.metrics.copy()
+            if "folds" in persisted_metrics:
+                persisted_metrics["folds"] = persisted_metrics["folds"].map(
+                    lambda value: json.dumps(value, sort_keys=True, default=str)
+                )
+            self._write_parquet(
+                f"reversal_model_metrics_{version}",
+                f"{artifact_root}/model_metrics.parquet",
+                persisted_metrics,
+            )
+            evidence = {
+                "study_version": version,
+                "executed": True,
+                "device_mode": "GPU" if use_gpu else "CPU",
+                "declared_trials": len(study.declared_trial_ids),
+                "failed_trials": list(study.failed_trial_ids),
+                "bias_tier": study.bias_tier,
+                "holdout_excluded_from_research": True,
+                "analysis_provenance": self._reversal_analysis_provenance(manifest),
+                "promotion_eligible": False,
+                "reason": "rank diagnostics require a causal portfolio backtest",
+                "disclaimer": DISCLAIMER,
+            }
+            self._write_json(
+                f"reversal_model_summary_{version}",
+                f"{artifact_root}/model_summary.json",
+                evidence,
+            )
+            return self._record_gate(
+                phase,
+                not study.failed_trial_ids,
+                "purged reversal model diagnostics completed",
+                evidence,
+            )
+        except Exception as error:
+            evidence = self._diagnostic(phase, error)
+            return self._record_gate(
+                phase,
+                False,
+                "reversal model study failed and was frozen as a diagnostic",
+                evidence,
+                blocked=True,
+            )
+
+    def _reversal_analysis_provenance(
+        self, data_manifest: dict[str, Any]
+    ) -> dict[str, str]:
+        """Hash the extension code/config/lock and immutable parent data inputs."""
+
+        lock_path = self.workspace / "uv.lock"
+        parent = self.catalog.campaign(self.campaign_id) or {}
+        return {
+            "parent_campaign_config_sha256": str(parent.get("config_sha256", "")),
+            "analysis_config_sha256": canonical_sha256(
+                self.config.model_dump(mode="json")
+            ),
+            "reversal_protocol_sha256": canonical_sha256(
+                self.config.reversal.model_dump(mode="json")
+            ),
+            "source_tree_sha256": source_tree_sha256(self.workspace),
+            "lock_sha256": (
+                sha256_file(lock_path) if lock_path.exists() else "MISSING"
+            ),
+            "bars_sha256": sha256_file(self.campaign_root / "data/bars.parquet"),
+            "universe_sha256": sha256_file(
+                self.campaign_root / "data/universe.parquet"
+            ),
+            "data_manifest_sha256": sha256_file(
+                self.campaign_root / "data/manifest.json"
+            ),
+            "data_snapshot_id": str(data_manifest.get("snapshot_id", "")),
+        }
 
     def validate(self) -> GateResult:
         """Apply OOS, CPCV/PBO, decay, cost, and confirmation requirements."""
@@ -1806,6 +2069,14 @@ def _annual_sharpe(values: pd.Series) -> float:
     if len(finite) < 2 or finite.std(ddof=1) == 0:
         return 0.0
     return float(finite.mean() / finite.std(ddof=1) * math.sqrt(252))
+
+
+def _compounded_return(values: pd.Series) -> float:
+    """Compound one annual stream without inventing inactive observations."""
+
+    selected = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    selected = selected[np.isfinite(selected)]
+    return float(np.prod(1.0 + selected) - 1.0) if selected.size else math.nan
 
 
 def _periodic_sharpe(values: np.ndarray[Any, np.dtype[np.float64]]) -> float:
