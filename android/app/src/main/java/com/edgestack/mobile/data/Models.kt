@@ -263,7 +263,11 @@ data class MobileSnapshot(
     }
 }
 
-data class AppSettings(val apiUrl: String, val demoMode: Boolean)
+data class AppSettings(
+    val apiUrl: String,
+    val demoMode: Boolean,
+    val rememberToken: Boolean = false,
+)
 
 enum class SnapshotOrigin { NETWORK, CACHE, DEMO }
 

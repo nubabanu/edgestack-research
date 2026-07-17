@@ -10,6 +10,7 @@ import com.edgestack.mobile.data.MobileSnapshot
 import com.edgestack.mobile.data.SettingsStore
 import com.edgestack.mobile.data.SnapshotOrigin
 import com.edgestack.mobile.data.SnapshotResult
+import com.edgestack.mobile.data.TokenVault
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +32,7 @@ data class MainUiState(
     // is never silently reverted before "Save and refresh".
     val draftApiUrl: String? = null,
     val draftDemo: Boolean? = null,
+    val draftRememberToken: Boolean? = null,
 )
 
 class MainViewModel(
@@ -48,6 +50,15 @@ class MainViewModel(
                 mutableState.update { it.copy(settings = settings) }
                 if (!loadedInitialSettings) {
                     loadedInitialSettings = true
+                    // Auto-connect: restore the Keystore-sealed token (opt-in)
+                    // so a saved sealed connection resumes without retyping.
+                    if (settings.rememberToken && mutableState.value.token.isEmpty()) {
+                        settingsStore.readSealedToken()
+                            ?.let(TokenVault::open)
+                            ?.let { restored ->
+                                mutableState.update { it.copy(token = restored) }
+                            }
+                    }
                     refresh()
                 }
             }
@@ -64,6 +75,10 @@ class MainViewModel(
 
     fun setDraftDemo(value: Boolean) {
         mutableState.update { it.copy(draftDemo = value) }
+    }
+
+    fun setDraftRememberToken(value: Boolean) {
+        mutableState.update { it.copy(draftRememberToken = value) }
     }
 
     fun testConnection(apiUrl: String, token: String) {
@@ -84,15 +99,40 @@ class MainViewModel(
         }
     }
 
-    fun saveSettings(apiUrl: String, demoMode: Boolean, token: String) {
+    fun saveSettings(
+        apiUrl: String,
+        demoMode: Boolean,
+        token: String,
+        rememberToken: Boolean = false,
+    ) {
         setToken(token)
         viewModelScope.launch {
-            runCatching { settingsStore.save(apiUrl, demoMode) }
+            val sealed = if (rememberToken && token.isNotEmpty()) {
+                TokenVault.seal(token)
+            } else {
+                null
+            }
+            // Sealing can fail on devices without a usable Keystore; the
+            // preference is then persisted as OFF rather than pretending.
+            val effectiveRemember = rememberToken && sealed != null
+            runCatching {
+                settingsStore.save(apiUrl, demoMode, effectiveRemember, sealed)
+            }
                 .onSuccess {
                     mutableState.update {
-                        it.copy(draftApiUrl = null, draftDemo = null)
+                        it.copy(
+                            draftApiUrl = null,
+                            draftDemo = null,
+                            draftRememberToken = null,
+                        )
                     }
-                    refresh(AppSettings(apiUrl.trim().removeSuffix("/"), demoMode))
+                    refresh(
+                        AppSettings(
+                            apiUrl.trim().removeSuffix("/"),
+                            demoMode,
+                            effectiveRemember,
+                        )
+                    )
                 }
                 .onFailure { error ->
                     mutableState.update { it.copy(fatalError = error.message) }

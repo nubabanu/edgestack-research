@@ -532,6 +532,7 @@ private fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
     val endpoint = state.draftApiUrl ?: settings.apiUrl
     val demo = state.draftDemo ?: settings.demoMode
     val token = state.token
+    val rememberToken = state.draftRememberToken ?: settings.rememberToken
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -571,11 +572,40 @@ private fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
                 onValueChange = viewModel::setToken,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Bearer token") },
-                supportingText = { Text("Held in memory only; never persisted") },
+                supportingText = {
+                    Text(
+                        if (rememberToken) {
+                            "Will be stored encrypted via Android Keystore on save"
+                        } else {
+                            "Held in memory only; never persisted"
+                        },
+                    )
+                },
                 enabled = !demo,
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
             )
+        }
+        item {
+            SectionCard("Auto-connect") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Remember token on this device", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Sealed with a hardware-backed Keystore key; the app " +
+                                "reconnects by itself on launch. Turning this off " +
+                                "wipes the stored token.",
+                            color = Fog,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(
+                        checked = rememberToken,
+                        onCheckedChange = viewModel::setDraftRememberToken,
+                        enabled = !demo,
+                    )
+                }
+            }
         }
         item {
             Button(
@@ -601,7 +631,7 @@ private fun SetupScreen(state: MainUiState, viewModel: MainViewModel) {
         }
         item {
             Button(
-                onClick = { viewModel.saveSettings(endpoint, demo, token) },
+                onClick = { viewModel.saveSettings(endpoint, demo, token, rememberToken) },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = demo || token.length >= 24,
             ) { Text("Save and refresh") }

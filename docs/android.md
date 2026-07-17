@@ -95,6 +95,15 @@ the printed token, demo mode off, then **Test connection** → **Save and
 refresh**. The one-time inbound firewall rule for the port must be added
 from an administrator terminal (the command is in the script header).
 
+For a fully automatic setup: enable **Remember token on this device** in the
+app before saving (the app then reconnects by itself every launch), and
+register the server to start at logon:
+
+```powershell
+schtasks /Create /TN "EdgeStack Mobile API" /SC ONLOGON /RL LIMITED `
+  /TR "pwsh -NoProfile -WindowStyle Hidden -File k:\earnmoney\scripts\serve-mobile.ps1"
+```
+
 ## Screens and behavior
 
 - **Plan** shows the next eligible closing-auction entry, submission deadline,
@@ -123,8 +132,12 @@ from an administrator terminal (the command is in the script header).
   artifact the tab fails closed to `DATA_UNAVAILABLE`.
 - **Evidence** replays holdout coverage, mean returns, terminal wealth, hashes,
   and audit events. It cannot trigger a recomputation.
-- **Setup** selects demo/network mode and an endpoint. Bearer tokens are held in
-  memory and must be re-entered after process death. A **Test connection**
+- **Setup** selects demo/network mode and an endpoint. By default the bearer
+  token is held in memory and must be re-entered after process death; the
+  opt-in "Remember token on this device" switch seals it with a
+  hardware-backed Android Keystore AES-GCM key so the app reconnects by
+  itself on launch. The sealed blob is useless off-device, and turning the
+  switch off (or failing to seal on devices without a Keystore) wipes it. A **Test connection**
   button probes the server before saving: it reports reachability (with a
   Wi-Fi/server/firewall checklist on failure), whether the server is SEALED
   or demo, and whether the bearer token is accepted — without loading a full
@@ -143,7 +156,8 @@ explicit warning. Demo and stale data are never styled as fresh network data.
 ## Security and limitations
 
 - This is not a secure enclave or an order-management system.
-- No API token is persisted, backed up, or added to logs.
+- The API token is never logged or backed up; it is persisted only when the
+  user opts into "Remember token", and then only as a Keystore-sealed blob.
 - Cached sealed snapshots contain research evidence but no credentials.
 - Free source quotes can be delayed or revised.
 - Current-constituent results remain visibly `SURVIVORSHIP_BIASED`.
