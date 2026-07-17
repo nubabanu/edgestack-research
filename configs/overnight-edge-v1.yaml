@@ -1,0 +1,78 @@
+# PREREGISTRATION — committed before any evaluation of this family is run.
+# Any change to this file after the first evaluation is a NEW campaign; the
+# original declaration stays in git history as the binding record.
+campaign_id: overnight-edge-v1-20260717-001
+declared_on: '2026-07-17'
+revision_context: ORIGINAL_PREREGISTRATION_NO_EVALUATION_RUN
+
+motivation:
+  source_evidence: >
+    The full-grid discovery campaign full-lit-v2-ci-20260716-002 (24,684
+    declared trials) was stopped by the survivor-fraction guard; its audit
+    found the overnight session family as the strongest non-reversal
+    structure: LONG overnight ANY at HAC t 10.7 net of declared costs, robust
+    across sector partitions (Information Technology t 11.1, Health Care
+    t 10.7, Financials t 10.1). Nothing survived family-wide DSR deflation at
+    n_trials=24684, which is precisely why this small preregistered family
+    exists: the reversal edge passed the gauntlet only as a 30-trial family.
+  literature:
+    - Cooper, Cliff, Gulen (2008) — the US overnight/intraday return split
+    - Lou, Polk, Skouras (2019) — overnight/intraday clientele persistence
+  economic_rationale: >
+    Structural clientele and inventory effects concentrate equity returns in
+    the close-to-open interval; market makers demand compensation for
+    overnight inventory risk and retail order flow clusters at the open.
+
+declared_family:
+  # 24 real trials; every one is evaluated, reported, and counted. Placebo
+  # controls (SHUFFLED_DATE and MATCHED_RANDOM, two per real trial) extend
+  # the accounting family to 72.
+  instruments:
+    - SPY
+    - EQUAL_WEIGHT_CURRENT_SP500_EQUITIES
+  conditions:
+    - ANY
+    - turn_of_month=TOM
+    - month_end_window=WINDOW
+    - weekday=FRI
+    - market_above_sma200
+    - market_vol_high_tercile
+  directions: [LONG, SHORT]
+  session: overnight_close_to_open
+  holding: one overnight interval per entry; no compounding of missed entries
+  real_trial_count: 24
+  placebo_controls_per_trial: 2
+  accounting_family_size: 72
+
+execution_contract:
+  entry: MOC buy at the close; decision frozen 15:45 America/New_York
+  exit: market-on-open sell at the next session's opening auction
+  costs: >
+    Full declared cost model on BOTH auctions daily: half-spread per fill,
+    base slippage, square-root impact at $100k capital, and the preregistered
+    0.5x/1x/2x/4x sensitivity ladder. Overnight strategies trade every
+    session, so the 4x-cost gate is expected to be the binding constraint and
+    a cost-negative result is a valid, reportable outcome.
+
+validation_protocol:
+  discovery_thresholds: LITERATURE_V2 (directed HAC t >= 3.8, BH q 0.05,
+    DSR >= 0.95 at the accounting family size, Romano-Wolf alpha 0.05,
+    White/Hansen family p < 0.05)
+  oos: expanding walk-forward (5y min train, 1y test) and CPCV (6 groups,
+    2 test, 21 purge/embargo) with PBO < 0.20
+  causality: per-survivor truncation invariance and extra-lag checks
+  confirmation: independent event-loop replication of every finalist
+
+holdout:
+  policy: FORWARD_ONLY
+  start: '2026-07-17'
+  end: '2028-07-17'
+  note: >
+    No historical window is reserved because prior windows were analytically
+    observed by earlier campaigns; the verdict accrues from data that did not
+    exist at declaration time. Interim looks at the forward window before
+    end are forbidden; a single evaluation consumes it.
+  evaluator: net mean AND stationary-bootstrap CI lower bound > 0 (CI_V2)
+
+status: DECLARED_AWAITING_IMPLEMENTATION
+live_capital: PAPER_ONLY

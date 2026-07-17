@@ -27,3 +27,4 @@ artifacts/
 *.iml
 /.android-sdk/
 /.gradle-dist/
+/android/keystore/

@@ -348,6 +348,38 @@ def advise(
     console.print_json(data=report)
 
 
+@app.command("post-close")
+def post_close(
+    campaign: Annotated[str, typer.Option("--campaign")] = (
+        "reversal-edge-v1-20260715-001"
+    ),
+    calendar_symbols: Annotated[
+        str,
+        typer.Option(
+            "--calendar-symbols",
+            help="Comma-separated symbols for tailwind calendars.",
+        ),
+    ] = "SPY,QQQ,GLD",
+) -> None:
+    """Nightly post-close loop: fresh basket scan, forward ledger, calendars.
+
+    Refuses to run unless the campaign's gauntlet gates are PASS. Idempotent
+    per completed session; safe to re-run.
+    """
+
+    from edgestack.live.daily_job import run_post_close
+
+    summary = run_post_close(
+        campaign_id=campaign,
+        calendar_symbols=tuple(
+            symbol.strip().upper()
+            for symbol in calendar_symbols.split(",")
+            if symbol.strip()
+        ),
+    )
+    console.print_json(data=summary)
+
+
 @app.command("tailwind-calendar")
 def tailwind_calendar(
     symbol: Annotated[str, typer.Option("--symbol", help="Ticker, e.g. SPY, QQQ, GLD, USO.")],

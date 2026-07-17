@@ -153,6 +153,24 @@ or short candidates when shorts are disabled. Network failures fall back to the
 last validated sealed snapshot; absent that, the packaged demo is shown with an
 explicit warning. Demo and stale data are never styled as fresh network data.
 
+## Not to be confused with other apps
+
+This companion (`com.edgestack.mobile`, "EdgeStack Paper") displays ONLY
+evidence that passed this repository's gauntlet: one promoted basket, sealed
+holdout replays, and clearly-watermarked diagnostics. Any other app —
+including other EdgeStack-branded experiments such as `com.edgestack.app` —
+draws on different pipelines with different (often far looser) validation
+standards; hundreds of "validated" edges in another app do not carry this
+repository's evidence discipline. When claims conflict, the sealed campaign
+catalog in this repository is the authority, and mixing the two apps'
+conclusions defeats the entire fail-closed design.
+
+Transport note: cleartext HTTP is restricted to private ranges (LAN
+192.168.x, Tailscale 100.x, emulator 10.0.2.2). For remote use prefer
+Tailscale, which encrypts end-to-end at the tunnel layer without exposing
+port 8765 to the internet; native TLS on the server would additionally
+require distributing a certificate the app trusts.
+
 ## Security and limitations
 
 - This is not a secure enclave or an order-management system.
