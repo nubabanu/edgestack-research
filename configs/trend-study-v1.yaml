@@ -1,0 +1,71 @@
+# PREREGISTRATION — committed before any evaluation of this family is run.
+# Any change to this file after the first evaluation is a NEW campaign; the
+# original declaration stays in git history as the binding record.
+campaign_id: trend-study-v1-20260717-001
+declared_on: '2026-07-17'
+revision_context: ORIGINAL_PREREGISTRATION_NO_EVALUATION_RUN
+
+motivation:
+  source_evidence: >
+    The overnight family failed precisely because daily two-auction turnover
+    cost 5-8 bp/session; the surviving lesson is that free-data edges must be
+    low turnover. Monthly-rebalanced trend rules trade ~0-4 round trips per
+    instrument per year, making the declared cost model a rounding error
+    rather than the verdict.
+  literature:
+    - Moskowitz, Ooi, Pedersen (2012) — time-series momentum across assets
+    - Faber (2007) — 10-month SMA timing on asset classes
+    - Cooper, Gutierrez, Hameed (2004); AQR TSMOM factors — 12-1 persistence
+  economic_rationale: >
+    Slow-moving capital, herding, and disposition effects produce
+    medium-horizon autocorrelation in broad index returns; monthly sampling
+    filters microstructure noise and keeps costs negligible.
+
+declared_family:
+  # 27 real trials; every one is evaluated, reported, and counted. Placebo
+  # controls (SHUFFLED_DATE and MATCHED_RANDOM, two per real trial) extend
+  # the accounting family to 81.
+  instruments: [SPY, QQQ, IWM, XLK, XLF, XLE, XLV, XLY, XLI]
+  signals:
+    - tsmom_12_1        # sign of the 12-month return skipping the last month
+    - above_sma200      # last month-end close above its 200-session SMA
+    - above_10m_sma     # last month-end close above its 10-month-end SMA
+  direction: LONG_ONLY_VS_CASH
+  short_side_excluded_reason: index shorts die to financing and borrow costs
+  rebalance: month-end close only (MOC); the position holds until the signal
+    flips at a later month-end; no intramonth trading of any kind
+  real_trial_count: 27
+  placebo_controls_per_trial: 2
+  accounting_family_size: 81
+
+execution_contract:
+  entry_exit: MOC on the final session of the month whenever the signal
+    differs from the held position; decision frozen 15:45 America/New_York
+  costs: >
+    Full declared cost model per FLIP only (half-spread per fill, base
+    slippage, square-root impact at $100k capital, turnover penalty), plus
+    the preregistered 0.5x/1x/2x/4x sensitivity ladder. Cash earns zero.
+
+validation_protocol:
+  discovery_thresholds: LITERATURE_V2 (directed HAC t >= 3.8 on the
+    timing-minus-nothing net stream, BH q 0.05, DSR >= 0.95 at the accounting
+    family size 81, Romano-Wolf alpha 0.05, White/Hansen family p < 0.05)
+  risk_report: Sharpe, max drawdown, and terminal wealth versus buy-and-hold
+    are REPORTED for every trial; they are context, not gates
+  oos: expanding walk-forward (5y min train, 1y test) and CPCV (6 groups,
+    2 test, 21 purge/embargo) with PBO < 0.20
+  causality: per-survivor truncation invariance and extra-lag checks
+  confirmation: independent event-loop replication of every finalist
+
+holdout:
+  policy: FORWARD_ONLY
+  start: '2026-07-17'
+  end: '2028-07-17'
+  note: >
+    No historical window is reserved; prior windows were analytically
+    observed by earlier campaigns. Interim looks are forbidden; a single
+    evaluation consumes it.
+  evaluator: net mean AND stationary-bootstrap CI lower bound > 0 (CI_V2)
+
+status: DECLARED_AWAITING_IMPLEMENTATION
+live_capital: PAPER_ONLY
