@@ -538,6 +538,35 @@ private fun PlanScreen(snapshot: MobileSnapshot, state: MainUiState) {
         item {
             SectionCard("Basket rule") { Text(snapshot.basketRule, color = Fog) }
         }
+        snapshot.tomPlan?.let { plan ->
+            item {
+                Text(
+                    "Validated edge #2 · Turn of month",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            item { TomPlanCard(plan) }
+        }
+    }
+}
+
+@Composable
+private fun TomPlanCard(plan: com.edgestack.mobile.data.TomPlan) {
+    Card(colors = CardDefaults.cardColors(containerColor = Mint.copy(alpha = 0.10f))) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("${plan.direction} ${plan.symbol}", fontWeight = FontWeight.Black, fontSize = 25.sp)
+                StatusPill(plan.state)
+            }
+            KeyValue("Entry", "${plan.entryOrder} · ${plan.entrySession}")
+            KeyValue("First exposure", plan.firstExposureSession)
+            KeyValue("Exit", "${plan.exitOrder} · ${plan.exitSession}")
+            KeyValue("Maximum allocation", money(plan.maximumAllocationUsd))
+            KeyValue("Sizing", plan.sizing)
+            Notice(plan.stop.replace('_', ' '), Gold)
+            Text(plan.evidence, color = Fog, style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 

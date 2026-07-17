@@ -1,6 +1,6 @@
 {
   "meta": {
-    "schema_version": "1.5",
+    "schema_version": "1.6",
     "generated_at": "2026-07-15T21:20:01.559063Z",
     "market_as_of": "2026-07-15_CLOSE",
     "source": "Packaged demonstration fixture",
@@ -456,5 +456,19 @@
       ],
       "diagnostic_watermark": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER: win scores are reliability-weighted historical hit rates, not success probabilities"
     }
-  ]
+  ],
+  "tom_plan": {
+    "state": "WAIT",
+    "symbol": "SPY",
+    "direction": "LONG",
+    "entry_session": "2026-07-30",
+    "entry_order": "MOC",
+    "first_exposure_session": "2026-07-31",
+    "exit_session": "2026-08-05",
+    "exit_order": "MOC",
+    "maximum_allocation_usd": 10000.0,
+    "sizing": "floor(min(10000 USD, 10 percent of paper equity) / entry price)",
+    "stop": "DISABLED_NOT_VALIDATED",
+    "evidence": "DEMO: sealed single-use holdout PASS; McConnell & Xu (2008) zero-parameter calendar rule"
+  }
 }

@@ -65,7 +65,7 @@ class SnapshotCodecTest {
 
     private fun validPayload(): String = """
         {
-          "meta":{"schema_version":"1.5","generated_at":"2026-07-16T12:00:00Z","market_as_of":"2026-07-15_CLOSE","source":"test","mode":"SEALED","stale":false},
+          "meta":{"schema_version":"1.6","generated_at":"2026-07-16T12:00:00Z","market_as_of":"2026-07-15_CLOSE","source":"test","mode":"SEALED","stale":false},
           "campaign_id":"campaign","model_name":"model","model_status":"PROMOTED","bias_tier":"SURVIVORSHIP_BIASED","watermark":"SURVIVORSHIP_BIASED","basket_rule":"both names are required",
           "instruction":{"entry_session":"2026-07-16","entry_order":"MOC","submit_by_et":"15:45 ET","exit_session":"2026-07-23","exit_order":"MOC","no_chase":"wait","cancel_if":["stale"]},
           "portfolio":{"paper_capital_usd":100000.0,"target_gross":0.5,"maximum_name_weight":0.1,"risk_budget_per_name_usd":500.0,"shorts_enabled":false},

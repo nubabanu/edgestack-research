@@ -19,7 +19,7 @@ class WireModel(BaseModel):
 class ApiMeta(WireModel):
     """Version and freshness metadata for one atomic snapshot."""
 
-    schema_version: Literal["1.5"] = "1.5"
+    schema_version: Literal["1.6"] = "1.6"
     generated_at: datetime
     market_as_of: str
     source: str
@@ -208,6 +208,26 @@ class TimingAdvisor(WireModel):
     )
 
 
+class TomPlan(WireModel):
+    """The validated turn-of-month edge's next calendar-known paper trade."""
+
+    state: Literal["WAIT", "ENTER", "HOLD", "EXIT"]
+    symbol: str
+    direction: Literal["LONG"]
+    entry_session: str
+    entry_order: Literal["MOC"]
+    first_exposure_session: str
+    exit_session: str
+    exit_order: Literal["MOC"]
+    maximum_allocation_usd: float = Field(gt=0)
+    sizing: str
+    stop: str
+    evidence: str = (
+        "Sealed single-use holdout PASS (2023-07-14 to 2026-07-14); "
+        "McConnell & Xu (2008) zero-parameter calendar rule"
+    )
+
+
 class MobileSnapshot(WireModel):
     """Atomic Android home-screen payload."""
 
@@ -231,6 +251,9 @@ class MobileSnapshot(WireModel):
     # Every advisor calendar published by the server (SPY, QQQ, GLD, ...);
     # ``timing`` stays the primary for older screens.
     timing_symbols: tuple[TimingAdvisor, ...] = ()
+    # Present only while the turn-of-month campaign's preholdout AND holdout
+    # gates are PASS in the catalog; absent otherwise (fail-closed).
+    tom_plan: TomPlan | None = None
     disclaimer: str = DISCLAIMER
 
     def model_post_init(self, __context: object) -> None:

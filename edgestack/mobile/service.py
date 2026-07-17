@@ -12,6 +12,7 @@ from typing import Any, cast
 from edgestack.mobile.models import (
     AlignmentLayer,
     AnchorLeg,
+    TomPlan,
     ApiMeta,
     AuditItem,
     EntryInstruction,
@@ -81,6 +82,7 @@ class MobileSnapshotService:
             signal,
             timing=advisors[0],
             timing_symbols=advisors,
+            tom_plan=_tom_plan(self.artifact_root),
         )
 
     def _campaign_directory(self) -> Path:
@@ -123,6 +125,7 @@ class MobileSnapshotService:
         *,
         timing: TimingAdvisor,
         timing_symbols: tuple[TimingAdvisor, ...] = (),
+        tom_plan: "TomPlan | None" = None,
     ) -> MobileSnapshot:
         candidates = cast(list[dict[str, Any]], signal.get("candidates", []))
         if not candidates:
@@ -209,6 +212,7 @@ class MobileSnapshotService:
             loss_aware_v2=_free_only_v2(),
             timing=timing,
             timing_symbols=timing_symbols,
+            tom_plan=tom_plan,
         )
 
 
@@ -369,6 +373,36 @@ def _timing_advisors(artifact_root: Path) -> tuple[TimingAdvisor, ...]:
         return (_timing_advisor(advisor_dir / "tailwind-calendar.json"),)
     advisors.sort(key=lambda advisor: (advisor.symbol != "SPY", advisor.symbol))
     return tuple(advisors)
+
+
+def _tom_plan(artifact_root: Path) -> TomPlan | None:
+    """Compute the validated turn-of-month plan, absent unless gates PASS.
+
+    ``next_trade`` itself refuses without PASS ``edge_preholdout`` and
+    ``edge_holdout`` catalog gates, so any failure — missing config, failed
+    gates, calendar issues — degrades to an absent section, never an error.
+    """
+
+    try:
+        from edgestack.edges.turn_of_month import next_trade
+
+        root = artifact_root.parent
+        payload = next_trade("configs/spy-tom-edge-v1.yaml", root=root)
+        return TomPlan(
+            state=str(payload["state"]),
+            symbol=str(payload["symbol"]),
+            direction=str(payload["direction"]),
+            entry_session=str(payload["entry_session"]),
+            entry_order=str(payload["entry_order"]),
+            first_exposure_session=str(payload["first_exposure_session"]),
+            exit_session=str(payload["exit_session"]),
+            exit_order=str(payload["exit_order"]),
+            maximum_allocation_usd=float(payload["maximum_allocation_usd"]),
+            sizing=str(payload["sizing"]),
+            stop=str(payload["stop"]),
+        )
+    except Exception:
+        return None
 
 
 def _timing_advisor(path: Path) -> TimingAdvisor:

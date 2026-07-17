@@ -180,6 +180,22 @@ data class TimingAdvisor(
 )
 
 @Serializable
+data class TomPlan(
+    val state: String,
+    val symbol: String,
+    val direction: String,
+    @SerialName("entry_session") val entrySession: String,
+    @SerialName("entry_order") val entryOrder: String,
+    @SerialName("first_exposure_session") val firstExposureSession: String,
+    @SerialName("exit_session") val exitSession: String,
+    @SerialName("exit_order") val exitOrder: String,
+    @SerialName("maximum_allocation_usd") val maximumAllocationUsd: Double,
+    val sizing: String,
+    val stop: String,
+    val evidence: String,
+)
+
+@Serializable
 data class MobileSnapshot(
     val meta: ApiMeta,
     @SerialName("campaign_id") val campaignId: String,
@@ -199,10 +215,11 @@ data class MobileSnapshot(
     @SerialName("loss_aware_v2") val lossAwareV2: LossAwareV2Summary,
     val timing: TimingAdvisor,
     @SerialName("timing_symbols") val timingSymbols: List<TimingAdvisor> = emptyList(),
+    @SerialName("tom_plan") val tomPlan: TomPlan? = null,
     val disclaimer: String,
 ) {
     fun validate(): MobileSnapshot {
-        require(meta.schemaVersion == "1.5") { "Unsupported mobile schema" }
+        require(meta.schemaVersion == "1.6") { "Unsupported mobile schema" }
         require(recommendations.map { it.rank } == (1..recommendations.size).toList()) {
             "Recommendation ranks are incomplete or reordered"
         }
