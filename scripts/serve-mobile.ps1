@@ -39,5 +39,19 @@ Write-Host "Refreshing tailwind calendar for $Symbol..."
 python -m edgestack.cli tailwind-calendar --symbol $Symbol --sessions $CalendarSessions `
     --output artifacts/advisor/tailwind-calendar.json | Out-Null
 
+# Warn when the newest paper signal is aging: the app will show its stale
+# banner past 36 hours, and entries must come from a fresh completed-close
+# scan, never a reused one.
+$signalDir = "artifacts/campaigns/$Campaign/live"
+$newest = Get-ChildItem $signalDir -Filter *.json -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime | Select-Object -Last 1
+if ($null -eq $newest) {
+    Write-Warning "No live signal found under $signalDir; the app will refuse to show a basket."
+} elseif ($newest.LastWriteTime -lt (Get-Date).AddHours(-36)) {
+    Write-Warning ("Newest signal {0} is {1:N0}h old; the app will show STALE. " -f `
+        $newest.Name, ((Get-Date) - $newest.LastWriteTime).TotalHours)
+    Write-Warning "Generate a fresh post-close scan before acting on the basket."
+}
+
 Write-Host "Starting mobile API on port $Port (campaign $Campaign). Ctrl+C stops it."
 python -m edgestack.cli mobile-api --host 0.0.0.0 --port $Port --campaign $Campaign
