@@ -59,7 +59,7 @@ def test_mobile_api_requires_constant_bearer_and_sets_evidence_headers(
     assert response.status_code == 200
     assert response.headers["etag"].startswith('"')
     assert response.headers["cache-control"] == "private, no-cache"
-    assert response.json()["meta"]["schema_version"] == "1.4"
+    assert response.json()["meta"]["schema_version"] == "1.5"
     assert "/orders" not in client.app.openapi()["paths"]
 
 

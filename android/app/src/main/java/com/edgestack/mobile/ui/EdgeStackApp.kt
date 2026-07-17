@@ -1,6 +1,7 @@
 package com.edgestack.mobile.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -312,7 +313,10 @@ private fun HorizonCard(plan: HorizonPlan) {
 
 @Composable
 private fun TimingScreen(snapshot: MobileSnapshot) {
-    val timing = snapshot.timing
+    val advisors = snapshot.timingSymbols.ifEmpty { listOf(snapshot.timing) }
+    var selectedSymbol by remember(advisors) { mutableStateOf(advisors.first().symbol) }
+    val timing = advisors.firstOrNull { it.symbol == selectedSymbol } ?: advisors.first()
+    var expandedSession by remember(selectedSymbol) { mutableStateOf<String?>(null) }
     BaseList(snapshot) {
         item {
             Text("Tailwind calendar", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
@@ -321,6 +325,27 @@ private fun TimingScreen(snapshot: MobileSnapshot) {
                 else "No advisor calendar artifact on the server",
                 color = Fog,
             )
+        }
+        if (advisors.size > 1) {
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    advisors.forEach { advisor ->
+                        val selected = advisor.symbol == selectedSymbol
+                        Text(
+                            advisor.symbol,
+                            modifier = Modifier
+                                .background(
+                                    if (selected) Mint else MaterialTheme.colorScheme.surface,
+                                    RoundedCornerShape(100.dp),
+                                )
+                                .clickable { selectedSymbol = advisor.symbol }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            color = if (selected) Ink else Fog,
+                            fontWeight = FontWeight.Black,
+                        )
+                    }
+                }
+            }
         }
         item { Notice(timing.diagnosticWatermark, Gold) }
         if (timing.status != "AVAILABLE") {
@@ -351,16 +376,32 @@ private fun TimingScreen(snapshot: MobileSnapshot) {
             }
         }
         item { SectionCard("Scoring policy") { Text(timing.policy, color = Fog, style = MaterialTheme.typography.bodySmall) } }
-        items(timing.calendar, key = { it.session }) { day ->
-            TailwindDayCard(day)
+        item { Text("Tap a session to rate it", color = Fog, style = MaterialTheme.typography.labelMedium) }
+        items(timing.calendar, key = { "${timing.symbol}-${it.session}" }) { day ->
+            TailwindDayCard(
+                day = day,
+                advisor = timing,
+                expanded = expandedSession == day.session,
+                onToggle = {
+                    expandedSession = if (expandedSession == day.session) null else day.session
+                },
+            )
         }
     }
 }
 
 @Composable
-private fun TailwindDayCard(day: com.edgestack.mobile.data.TailwindDay) {
+private fun TailwindDayCard(
+    day: com.edgestack.mobile.data.TailwindDay,
+    advisor: com.edgestack.mobile.data.TimingAdvisor,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
     val favorable = day.expectedDailyBp >= 0
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -384,9 +425,59 @@ private fun TailwindDayCard(day: com.edgestack.mobile.data.TailwindDay) {
                     if (day.conditions.isEmpty()) "none" else day.conditions.joinToString(limit = 3) { it.substringAfter('=') },
                 )
             }
+            if (expanded) {
+                HorizontalDivider(color = PanelSoft)
+                DayRating(day, advisor)
+            }
         }
     }
 }
+
+@Composable
+private fun DayRating(
+    day: com.edgestack.mobile.data.TailwindDay,
+    advisor: com.edgestack.mobile.data.TimingAdvisor,
+) {
+    // Client-side "rate my day": rank this session's score within every
+    // scanned session and surface the better upcoming alternatives.
+    val scores = advisor.calendar.map { it.alignmentRank() }
+    val rank = scores.count { it > day.alignmentRank() } + 1
+    val better = advisor.calendar
+        .filter { it.alignmentRank() > day.alignmentRank() && it.session > day.session }
+        .take(3)
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        KeyValue("Rank among scanned", "$rank of ${advisor.calendar.size}")
+        KeyValue(
+            "Verdict",
+            when {
+                rank <= advisor.calendar.size / 4 -> "TOP-QUARTILE session"
+                rank > advisor.calendar.size * 3 / 4 -> "BOTTOM-QUARTILE — better days exist"
+                else -> "mid-pack"
+            },
+        )
+        if (better.isNotEmpty()) {
+            Text("Better later sessions:", color = Gold, fontWeight = FontWeight.Bold)
+            better.forEach {
+                Text(
+                    "• ${it.session} (${it.weekday}) · win ${it.winScore} · ${it.expectedDailyBp.format(1)} bp",
+                    color = Fog,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        advisor.anchors?.let {
+            Text("Buy: ${it.bestBuyAnchor.substringBefore(" (")} · Sell: ${it.matchingSellAnchor}", color = Mint, style = MaterialTheme.typography.bodySmall)
+        }
+        Text(
+            "Historical frequencies, not forecasts. Revalidate after every close; final check 15:45 ET.",
+            color = Fog,
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+private fun com.edgestack.mobile.data.TailwindDay.alignmentRank(): Double =
+    expectedDailyBp + winScore / 1000.0
 
 @Composable
 private fun BaseList(

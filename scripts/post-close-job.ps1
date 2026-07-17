@@ -4,6 +4,12 @@
 # Regenerates the five-name basket signal from the completed close, appends
 # fills/marks/exits to the append-only forward ledger, refreshes the tailwind
 # calendars, and logs a one-line summary. Idempotent; safe to re-run.
+#
+# Optional Telegram push (fresh-basket summary to your phone): create a bot
+# with @BotFather, message it once, then set USER environment variables and
+# the next run notifies automatically:
+#   setx EDGESTACK_TELEGRAM_TOKEN "<bot token>"
+#   setx EDGESTACK_TELEGRAM_CHAT  "<your chat id>"
 
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")

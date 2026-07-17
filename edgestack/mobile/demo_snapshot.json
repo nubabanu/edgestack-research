@@ -1,6 +1,6 @@
 {
   "meta": {
-    "schema_version": "1.4",
+    "schema_version": "1.5",
     "generated_at": "2026-07-15T21:20:01.559063Z",
     "market_as_of": "2026-07-15_CLOSE",
     "source": "Packaged demonstration fixture",
@@ -326,5 +326,135 @@
       }
     ],
     "diagnostic_watermark": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER: win scores are reliability-weighted historical hit rates, not success probabilities"
-  }
+  },
+  "timing_symbols": [
+    {
+      "status": "AVAILABLE",
+      "symbol": "SPY",
+      "as_of_session": "2026-07-14",
+      "policy": "DEMO: score = sum of DSR-reliability-weighted, family-shrunk condition means active that session; win score = reliability-weighted blend of active-condition hit rates shrunk toward 50",
+      "anchors": {
+        "status": "TWO_ANCHORS_ONLY",
+        "best_buy_anchor": "CLOSE_AUCTION (decide by 15:45 ET, fill ~16:00 ET; captures the overnight leg)",
+        "matching_sell_anchor": "next OPEN_AUCTION (~09:30 ET)",
+        "overnight": {
+          "n": 5020,
+          "mean_daily_bp": 3.2,
+          "hit_rate": 0.556
+        },
+        "intraday": {
+          "n": 5020,
+          "mean_daily_bp": 1.8,
+          "hit_rate": 0.54
+        },
+        "finer_granularity": "DATA_UNAVAILABLE beyond the two auction anchors: daily bars hold no hourly prices"
+      },
+      "calendar": [
+        {
+          "session": "2026-07-15",
+          "weekday": "WED",
+          "win_score": 56,
+          "expected_daily_bp": 2.9,
+          "conditions": [
+            "weekday=WED"
+          ]
+        },
+        {
+          "session": "2026-07-16",
+          "weekday": "THU",
+          "win_score": 55,
+          "expected_daily_bp": 2.3,
+          "conditions": [
+            "weekday=THU"
+          ]
+        },
+        {
+          "session": "2026-07-17",
+          "weekday": "FRI",
+          "win_score": 55,
+          "expected_daily_bp": 2.4,
+          "conditions": [
+            "weekday=FRI",
+            "opex_week"
+          ]
+        },
+        {
+          "session": "2026-07-31",
+          "weekday": "FRI",
+          "win_score": 57,
+          "expected_daily_bp": 3.4,
+          "conditions": [
+            "weekday=FRI",
+            "turn_of_month",
+            "month_end_window"
+          ]
+        }
+      ],
+      "diagnostic_watermark": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER: win scores are reliability-weighted historical hit rates, not success probabilities"
+    },
+    {
+      "status": "AVAILABLE",
+      "symbol": "QQQ",
+      "as_of_session": "2026-07-14",
+      "policy": "DEMO: score = sum of DSR-reliability-weighted, family-shrunk condition means active that session; win score = reliability-weighted blend of active-condition hit rates shrunk toward 50",
+      "anchors": {
+        "status": "TWO_ANCHORS_ONLY",
+        "best_buy_anchor": "CLOSE_AUCTION (decide by 15:45 ET, fill ~16:00 ET; captures the overnight leg)",
+        "matching_sell_anchor": "next OPEN_AUCTION (~09:30 ET)",
+        "overnight": {
+          "n": 5020,
+          "mean_daily_bp": 3.2,
+          "hit_rate": 0.556
+        },
+        "intraday": {
+          "n": 5020,
+          "mean_daily_bp": 1.8,
+          "hit_rate": 0.54
+        },
+        "finer_granularity": "DATA_UNAVAILABLE beyond the two auction anchors: daily bars hold no hourly prices"
+      },
+      "calendar": [
+        {
+          "session": "2026-07-15",
+          "weekday": "WED",
+          "win_score": 56,
+          "expected_daily_bp": 2.9,
+          "conditions": [
+            "weekday=WED"
+          ]
+        },
+        {
+          "session": "2026-07-16",
+          "weekday": "THU",
+          "win_score": 55,
+          "expected_daily_bp": 2.3,
+          "conditions": [
+            "weekday=THU"
+          ]
+        },
+        {
+          "session": "2026-07-17",
+          "weekday": "FRI",
+          "win_score": 55,
+          "expected_daily_bp": 2.4,
+          "conditions": [
+            "weekday=FRI",
+            "opex_week"
+          ]
+        },
+        {
+          "session": "2026-07-31",
+          "weekday": "FRI",
+          "win_score": 57,
+          "expected_daily_bp": 3.4,
+          "conditions": [
+            "weekday=FRI",
+            "turn_of_month",
+            "month_end_window"
+          ]
+        }
+      ],
+      "diagnostic_watermark": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER: win scores are reliability-weighted historical hit rates, not success probabilities"
+    }
+  ]
 }

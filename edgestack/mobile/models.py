@@ -19,7 +19,7 @@ class WireModel(BaseModel):
 class ApiMeta(WireModel):
     """Version and freshness metadata for one atomic snapshot."""
 
-    schema_version: Literal["1.4"] = "1.4"
+    schema_version: Literal["1.5"] = "1.5"
     generated_at: datetime
     market_as_of: str
     source: str
@@ -228,6 +228,9 @@ class MobileSnapshot(WireModel):
     sniper: SniperPolicy
     loss_aware_v2: LossAwareV2Summary
     timing: TimingAdvisor
+    # Every advisor calendar published by the server (SPY, QQQ, GLD, ...);
+    # ``timing`` stays the primary for older screens.
+    timing_symbols: tuple[TimingAdvisor, ...] = ()
     disclaimer: str = DISCLAIMER
 
     def model_post_init(self, __context: object) -> None:
@@ -286,7 +289,15 @@ class MobileSnapshot(WireModel):
             raise ValueError("V2 selection requires loss evidence")
         if self.loss_aware_v2.selected_leverage not in {1.0, 1.5, 2.0}:
             raise ValueError("V2 leverage must be a preregistered trial")
-        if self.timing.status == "AVAILABLE" and not self.timing.calendar:
-            raise ValueError("an available timing advisor requires calendar rows")
-        if self.timing.status == "DATA_UNAVAILABLE" and self.timing.calendar:
-            raise ValueError("an unavailable timing advisor cannot emit a calendar")
+        for advisor in (self.timing, *self.timing_symbols):
+            if advisor.status == "AVAILABLE" and not advisor.calendar:
+                raise ValueError(
+                    "an available timing advisor requires calendar rows"
+                )
+            if advisor.status == "DATA_UNAVAILABLE" and advisor.calendar:
+                raise ValueError(
+                    "an unavailable timing advisor cannot emit a calendar"
+                )
+        symbols = [advisor.symbol for advisor in self.timing_symbols]
+        if len(symbols) != len(set(symbols)):
+            raise ValueError("timing symbols must be unique")

@@ -72,13 +72,15 @@ class MobileSnapshotService:
         signal = _mapping(signal_path)
         if signal.get("bias_tier") not in {"SURVIVORSHIP_BIASED", "POINT_IN_TIME"}:
             raise SnapshotUnavailableError("signal lacks an explicit bias tier")
+        advisors = _timing_advisors(self.artifact_root)
         return self._normalize(
             campaign.name,
             holdout_path,
             holdout,
             signal_path,
             signal,
-            timing=_timing_advisor(self.artifact_root),
+            timing=advisors[0],
+            timing_symbols=advisors,
         )
 
     def _campaign_directory(self) -> Path:
@@ -120,6 +122,7 @@ class MobileSnapshotService:
         signal: dict[str, Any],
         *,
         timing: TimingAdvisor,
+        timing_symbols: tuple[TimingAdvisor, ...] = (),
     ) -> MobileSnapshot:
         candidates = cast(list[dict[str, Any]], signal.get("candidates", []))
         if not candidates:
@@ -205,6 +208,7 @@ class MobileSnapshotService:
             sniper=_sniper_policy(recommendations),
             loss_aware_v2=_free_only_v2(),
             timing=timing,
+            timing_symbols=timing_symbols,
         )
 
 
@@ -343,16 +347,33 @@ def _free_only_v2() -> LossAwareV2Summary:
 _MOBILE_CALENDAR_ROWS = 21
 
 
-def _timing_advisor(artifact_root: Path) -> TimingAdvisor:
-    """Load the persisted tailwind-calendar artifact, failing to UNAVAILABLE.
+def _timing_advisors(artifact_root: Path) -> tuple[TimingAdvisor, ...]:
+    """Load every published advisor calendar; SPY (or first) leads as primary.
 
-    The artifact is written by ``edgestack tailwind-calendar --output
-    artifacts/advisor/tailwind-calendar.json``; a missing or malformed file
-    yields an explicit DATA_UNAVAILABLE section rather than an error, because
-    the timing advisor is diagnostic context, never gate evidence.
+    The nightly job writes one ``tailwind-calendar-<SYMBOL>.json`` per symbol
+    plus the legacy single-file name; a missing or malformed set degrades to
+    one explicit DATA_UNAVAILABLE advisor, never an error.
     """
 
-    path = artifact_root / "advisor" / "tailwind-calendar.json"
+    advisor_dir = artifact_root / "advisor"
+    paths = sorted(advisor_dir.glob("tailwind-calendar-*.json"))
+    if not paths:
+        legacy = advisor_dir / "tailwind-calendar.json"
+        paths = [legacy] if legacy.is_file() else []
+    advisors = [
+        advisor
+        for advisor in (_timing_advisor(path) for path in paths)
+        if advisor.status == "AVAILABLE"
+    ]
+    if not advisors:
+        return (_timing_advisor(advisor_dir / "tailwind-calendar.json"),)
+    advisors.sort(key=lambda advisor: (advisor.symbol != "SPY", advisor.symbol))
+    return tuple(advisors)
+
+
+def _timing_advisor(path: Path) -> TimingAdvisor:
+    """Parse one tailwind-calendar artifact, failing to UNAVAILABLE."""
+
     unavailable = TimingAdvisor(
         status="DATA_UNAVAILABLE",
         symbol="NONE",

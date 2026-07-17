@@ -396,7 +396,7 @@ def run_post_close(
             calendars[symbol] = "OK"
         except Exception as error:  # a calendar failure must not kill the scan
             calendars[symbol] = f"FAILED: {error}"
-    return {
+    summary = {
         "as_of": as_of.isoformat(),
         "signal_written": wrote_signal,
         "signal_path": str(signal_path),
@@ -406,6 +406,61 @@ def run_post_close(
         "universe_size": len(equities),
         "fetched": len(panel),
     }
+    summary["telegram"] = _notify_telegram(summary, signal_path)
+    return summary
+
+
+def _notify_telegram(summary: dict[str, Any], signal_path: Path) -> str:
+    """Push the nightly result to Telegram when credentials are configured.
+
+    Reads EDGESTACK_TELEGRAM_TOKEN and EDGESTACK_TELEGRAM_CHAT from the
+    environment; absent credentials mean a clean, explicit skip. Delivery is
+    at-least-once and idempotent per session via the event id; a send failure
+    never fails the scan itself.
+    """
+
+    import os
+
+    token = os.environ.get("EDGESTACK_TELEGRAM_TOKEN", "").strip()
+    chat = os.environ.get("EDGESTACK_TELEGRAM_CHAT", "").strip()
+    if not token or not chat:
+        return "SKIPPED_NO_CREDENTIALS"
+    import json as json_module
+
+    from datetime import UTC, datetime
+
+    from edgestack.live.notify import TelegramChannel
+    from edgestack.models import AlertEvent
+
+    try:
+        payload = json_module.loads(signal_path.read_text(encoding="utf-8"))
+        candidates = payload.get("candidates", [])
+        names = " ".join(
+            f"{item['symbol']}" for item in candidates
+        ) or "none"
+        entry = payload.get("entry", {})
+        message = (
+            f"EdgeStack post-close {summary['as_of']}\n"
+            f"Basket ({len(candidates)}): {names}\n"
+            f"Entry MOC {entry.get('session', '?')} · submit by 15:45 ET\n"
+            f"Exit MOC {payload.get('exit', {}).get('session', '?')}\n"
+            f"Signal {'FRESH' if summary['signal_written'] else 'already existed'}"
+            f" · forward fills {summary['ledger']}\n"
+            "PAPER ONLY · not financial advice · revalidate before the close"
+        )
+        event = AlertEvent(
+            event_id=f"post-close-{summary['as_of']}",
+            recommendation_id=str(payload.get("freeze_id", "unknown"))[:16],
+            revision=1,
+            event_type="POST_CLOSE_SCAN",
+            message=message,
+            created_at=datetime.now(UTC),
+        )
+        channel = TelegramChannel(token=token, chat_id=chat)
+        asyncio.run(channel.send(event, event.event_id))
+        return "SENT"
+    except Exception as error:  # notification failure must not fail the scan
+        return f"FAILED: {error}"
 
 
 __all__ = [

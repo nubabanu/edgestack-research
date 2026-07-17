@@ -198,10 +198,11 @@ data class MobileSnapshot(
     val sniper: SniperPolicy,
     @SerialName("loss_aware_v2") val lossAwareV2: LossAwareV2Summary,
     val timing: TimingAdvisor,
+    @SerialName("timing_symbols") val timingSymbols: List<TimingAdvisor> = emptyList(),
     val disclaimer: String,
 ) {
     fun validate(): MobileSnapshot {
-        require(meta.schemaVersion == "1.4") { "Unsupported mobile schema" }
+        require(meta.schemaVersion == "1.5") { "Unsupported mobile schema" }
         require(recommendations.map { it.rank } == (1..recommendations.size).toList()) {
             "Recommendation ranks are incomplete or reordered"
         }
@@ -250,14 +251,19 @@ data class MobileSnapshot(
             lossAwareV2.selectedHorizon == "NONE" ||
                 lossAwareV2.lossMetrics.status == "AVAILABLE",
         ) { "V2 selection requires loss evidence" }
-        require(timing.status != "AVAILABLE" || timing.calendar.isNotEmpty()) {
-            "An available timing advisor requires calendar rows"
+        (listOf(timing) + timingSymbols).forEach { advisor ->
+            require(advisor.status != "AVAILABLE" || advisor.calendar.isNotEmpty()) {
+                "An available timing advisor requires calendar rows"
+            }
+            require(advisor.status != "DATA_UNAVAILABLE" || advisor.calendar.isEmpty()) {
+                "An unavailable timing advisor cannot emit a calendar"
+            }
+            require(advisor.calendar.all { it.winScore in 0..100 }) {
+                "Timing win scores must lie in 0..100"
+            }
         }
-        require(timing.status != "DATA_UNAVAILABLE" || timing.calendar.isEmpty()) {
-            "An unavailable timing advisor cannot emit a calendar"
-        }
-        require(timing.calendar.all { it.winScore in 0..100 }) {
-            "Timing win scores must lie in 0..100"
+        require(timingSymbols.map { it.symbol }.distinct().size == timingSymbols.size) {
+            "Timing symbols must be unique"
         }
         return this
     }
