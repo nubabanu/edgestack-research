@@ -87,6 +87,19 @@ fun EdgeStackApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var tab by remember { mutableStateOf(AppTab.PLAN) }
 
+    // Reconnect automatically whenever the app returns to the foreground
+    // (throttled in the ViewModel); opening the app is enough to refresh.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_START) {
+                viewModel.onAppForeground()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(

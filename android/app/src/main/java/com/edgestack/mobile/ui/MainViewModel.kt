@@ -43,6 +43,7 @@ class MainViewModel(
     val state: StateFlow<MainUiState> = mutableState.asStateFlow()
     private var refreshJob: Job? = null
     private var loadedInitialSettings = false
+    private var lastLoadCompletedAtMs = 0L
 
     init {
         viewModelScope.launch {
@@ -63,6 +64,17 @@ class MainViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * Reconnect whenever the app returns to the foreground, throttled so
+     * quick app switches do not hammer the server. Called from the UI's
+     * lifecycle observer; the initial launch refresh is handled in init.
+     */
+    fun onAppForeground() {
+        if (!loadedInitialSettings) return
+        val elapsed = System.currentTimeMillis() - lastLoadCompletedAtMs
+        if (elapsed >= FOREGROUND_REFRESH_THROTTLE_MS) refresh()
     }
 
     fun setToken(value: String) {
@@ -156,6 +168,7 @@ class MainViewModel(
     }
 
     private fun show(result: SnapshotResult) {
+        lastLoadCompletedAtMs = System.currentTimeMillis()
         mutableState.update {
             it.copy(
                 loading = false,
@@ -165,6 +178,10 @@ class MainViewModel(
                 fatalError = null,
             )
         }
+    }
+
+    companion object {
+        private const val FOREGROUND_REFRESH_THROTTLE_MS = 60_000L
     }
 
     class Factory(
