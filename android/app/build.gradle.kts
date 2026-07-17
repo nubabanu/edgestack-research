@@ -14,6 +14,20 @@ val keystoreProperties = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
+// Personal zero-typing defaults for DEBUG builds only, read from the
+// gitignored local.properties so the bearer token never enters version
+// control (edgestack.defaultApiUrl / edgestack.defaultToken). When a token
+// is present the app starts in network mode preconfigured for the owner's
+// own server; without one it behaves exactly as before.
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val defaultApiUrl = localProperties.getProperty(
+    "edgestack.defaultApiUrl", "http://10.0.2.2:8765"
+)
+val defaultToken = localProperties.getProperty("edgestack.defaultToken", "")
+
 android {
     namespace = "com.edgestack.mobile"
     compileSdk = 36
@@ -45,12 +59,18 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "DEFAULT_API_URL", "\"http://10.0.2.2:8765\"")
+            buildConfigField("String", "DEFAULT_API_URL", "\"$defaultApiUrl\"")
+            buildConfigField("String", "DEFAULT_BEARER_TOKEN", "\"$defaultToken\"")
+            buildConfigField(
+                "Boolean", "DEFAULT_DEMO_MODE", if (defaultToken.isEmpty()) "true" else "false"
+            )
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             buildConfigField("String", "DEFAULT_API_URL", "\"https://example.invalid\"")
+            buildConfigField("String", "DEFAULT_BEARER_TOKEN", "\"\"")
+            buildConfigField("Boolean", "DEFAULT_DEMO_MODE", "true")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

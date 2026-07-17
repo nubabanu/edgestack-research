@@ -3,6 +3,7 @@ package com.edgestack.mobile.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.edgestack.mobile.BuildConfig
 import com.edgestack.mobile.data.AppSettings
 import com.edgestack.mobile.data.ConnectionProbe
 import com.edgestack.mobile.data.EdgeStackRepository
@@ -59,6 +60,16 @@ class MainViewModel(
                             ?.let { restored ->
                                 mutableState.update { it.copy(token = restored) }
                             }
+                    }
+                    // Owner-build convenience: fall back to the compile-time
+                    // default token (debug builds only) so a personal build
+                    // connects with zero typing.
+                    if (mutableState.value.token.isEmpty() &&
+                        BuildConfig.DEFAULT_BEARER_TOKEN.isNotEmpty()
+                    ) {
+                        mutableState.update {
+                            it.copy(token = BuildConfig.DEFAULT_BEARER_TOKEN)
+                        }
                     }
                     refresh()
                 }

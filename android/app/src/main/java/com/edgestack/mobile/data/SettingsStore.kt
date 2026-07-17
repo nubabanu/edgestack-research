@@ -21,7 +21,7 @@ class SettingsStore(private val context: Context) {
     val settings: Flow<AppSettings> = context.dataStore.data.map { values ->
         AppSettings(
             apiUrl = values[apiUrlKey] ?: BuildConfig.DEFAULT_API_URL,
-            demoMode = values[demoModeKey] ?: true,
+            demoMode = values[demoModeKey] ?: BuildConfig.DEFAULT_DEMO_MODE,
             rememberToken = values[rememberTokenKey] ?: false,
         )
     }
