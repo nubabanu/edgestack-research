@@ -60,6 +60,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.edgestack.mobile.data.MobileSnapshot
+import com.edgestack.mobile.data.OilHorizonDecision
+import com.edgestack.mobile.data.OilSnapshot
 import com.edgestack.mobile.data.HorizonPlan
 import com.edgestack.mobile.data.Recommendation
 import com.edgestack.mobile.data.SnapshotOrigin
@@ -78,6 +80,7 @@ private enum class AppTab(val label: String, val icon: ImageVector) {
     BASKET("Basket", Icons.Outlined.Assessment),
     HORIZONS("Sniper", Icons.Outlined.DateRange),
     TIMING("Timing", Icons.Outlined.Schedule),
+    OIL("Oil", Icons.Outlined.Science),
     EVIDENCE("Evidence", Icons.Outlined.Shield),
     SETUP("Setup", Icons.Outlined.Settings),
 }
@@ -177,8 +180,86 @@ private fun SnapshotContent(
         AppTab.BASKET -> BasketScreen(snapshot)
         AppTab.HORIZONS -> HorizonsScreen(snapshot)
         AppTab.TIMING -> TimingScreen(snapshot)
+        AppTab.OIL -> OilScreen(snapshot.oil)
         AppTab.EVIDENCE -> EvidenceScreen(snapshot)
         AppTab.SETUP -> SetupScreen(state, viewModel)
+    }
+}
+
+@Composable
+private fun OilScreen(oil: OilSnapshot?) {
+    if (oil == null) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item { Text("Oil paper decision", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold) }
+            item { Notice("DATA UNAVAILABLE · run the local oil-decision command", Coral) }
+            item { Text("No oil trade is implied. The mobile API is read-only and has no broker endpoint.", color = Fog) }
+        }
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item {
+            Text("Oil paper decision", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("USO proxy · market ${oil.marketAsOf}", color = Fog)
+        }
+        item {
+            val active = oil.status == "PAPER_LONG"
+            Notice(
+                "${oil.status.replace('_', ' ')} · ${oil.proxyAgreement} proxy agreement",
+                if (active) Mint else Coral,
+            )
+        }
+        item { Notice(oil.watermark, Gold) }
+        item { SectionCard("Basis boundary") { Text(oil.basisWarning, color = Fog) } }
+        item {
+            SectionCard("Causal data gates") {
+                oil.dataGates.forEach { gate ->
+                    KeyValue(gate.name.replace('_', ' '), gate.status.replace('_', ' '))
+                    Text(gate.reason, color = Fog, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        item { OilHorizonCard(oil.intraday) }
+        item { OilHorizonCard(oil.swing) }
+    }
+}
+
+@Composable
+private fun OilHorizonCard(decision: OilHorizonDecision) {
+    val active = decision.status == "PAPER_LONG"
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(decision.horizon.replace('_', ' '), color = Gold, fontWeight = FontWeight.Black)
+                Text(decision.status.replace('_', ' '), color = if (active) Mint else Coral, fontWeight = FontWeight.Black)
+            }
+            KeyValue("Evidence", decision.evidenceStatus.replace('_', ' '))
+            KeyValue("Entry", decision.plannedEntry)
+            KeyValue("Exit", decision.plannedExit)
+            KeyValue("USO reference", decision.referencePriceUsd?.let(::money) ?: "DATA UNAVAILABLE")
+            KeyValue("2× ATR stop", decision.atr14Usd?.let { money(it * 2.0) } ?: "DATA UNAVAILABLE")
+            if (decision.activeVetoes.isNotEmpty()) {
+                SectionCard("Hard vetoes") {
+                    decision.activeVetoes.forEach { Text("• ${it.replace('_', ' ')}", color = Coral) }
+                }
+            }
+            SectionCard("Risk-sized counterfactual lanes") {
+                decision.lanes.forEach { lane ->
+                    Text(lane.label, fontWeight = FontWeight.Bold, color = if (lane.name == "CHALLENGE_10") Coral else Fog)
+                    KeyValue("Risk ceiling", percent(lane.riskFraction))
+                    KeyValue("Maximum planned loss", money(lane.maximumPlannedLossUsd))
+                    KeyValue("Notional / margin", "${money(lane.notionalUsd)} / ${money(lane.marginUsd)}")
+                    KeyValue("Leverage", lane.leverage?.let { "${it}× paper only" } ?: lane.status)
+                    KeyValue("Equity / drawdown", "${money(lane.equityUsd)} / ${percent(lane.drawdownFraction)}")
+                    HorizontalDivider(color = PanelSoft)
+                }
+            }
+        }
     }
 }
 

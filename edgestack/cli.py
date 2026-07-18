@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 from rich.console import Console
@@ -593,6 +593,207 @@ def paper_scorecard(
     console.print_json(data=StateStore(database).paper_scorecard())
 
 
+@app.command("oil-research")
+def oil_research(
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/oil-paper-v1.yaml"),
+    root: Annotated[
+        Path, typer.Option("--root", file_okay=False, help="Repository root.")
+    ] = Path("."),
+) -> None:
+    """Run the preregistered oil diagnostics and create the forward freeze."""
+
+    from edgestack.oil.research import run_oil_research
+
+    path = run_oil_research(config, root=root)
+    console.print(f"Oil forward governance written to [bold]{path}[/bold]")
+
+
+@app.command("oil-context")
+def oil_context(
+    spread_bps: Annotated[float, typer.Option("--spread-bps", min=0)],
+    overnight_fee_usd_per_unit: Annotated[
+        float, typer.Option("--overnight-fee-usd-per-unit", min=0)
+    ],
+    event_risk: Annotated[
+        str, typer.Option("--event-risk", help="NORMAL, ELEVATED, EXTREME, or UNKNOWN.")
+    ],
+    expires: Annotated[
+        str,
+        typer.Option(
+            "--expires", help="Timezone-aware ISO expiry, for example 2026-07-20T17:00-04:00."
+        ),
+    ],
+    note: Annotated[str, typer.Option("--note")] = "",
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Record short-lived manual spread, financing, and event-risk context."""
+
+    from datetime import UTC
+
+    from edgestack.oil.context import OilContextStore
+    from edgestack.oil.models import OilContext
+
+    normalized_risk = event_risk.strip().upper()
+    if normalized_risk not in {"NORMAL", "ELEVATED", "EXTREME", "UNKNOWN"}:
+        raise typer.BadParameter("expected NORMAL, ELEVATED, EXTREME, or UNKNOWN", param_hint="--event-risk")
+    expiry = _parse_iso_datetime(expires, "--expires")
+    now = datetime.now(UTC)
+    context = OilContext(
+        recorded_at=now,
+        expires_at=expiry,
+        spread_bps=spread_bps,
+        overnight_fee_usd_per_unit=overnight_fee_usd_per_unit,
+        event_risk=normalized_risk,
+        note=note,
+    )
+    path = OilContextStore(artifacts / "oil" / "context.json").write(context)
+    console.print(f"Expiring oil context written to [bold]{path}[/bold]")
+
+
+@app.command("oil-decision")
+def oil_decision(
+    paper_equity: Annotated[
+        float, typer.Option("--paper-equity", min=0.01, help="Current paper equity in USD.")
+    ],
+    as_of: Annotated[
+        str | None,
+        typer.Option(
+            "--as-of",
+            help="Timezone-aware ISO timestamp, or a date interpreted as 08:30 ET.",
+        ),
+    ] = None,
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/oil-paper-v1.yaml"),
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Emit and append one paper-only oil snapshot; never contact a broker."""
+
+    import asyncio
+    from datetime import UTC
+
+    from edgestack.oil.decision import (
+        build_oil_snapshot,
+        fetch_oil_inputs,
+        load_oil_config,
+    )
+
+    moment = _parse_oil_as_of(as_of) if as_of else datetime.now(UTC)
+    resolved = load_oil_config(config)
+    inputs = asyncio.run(
+        fetch_oil_inputs(as_of=moment, artifact_root=artifacts, config=resolved)
+    )
+    snapshot = build_oil_snapshot(
+        inputs,
+        paper_equity_usd=paper_equity,
+        as_of=moment,
+        config=resolved,
+        artifact_root=artifacts,
+    )
+    console.print_json(data=snapshot.model_dump(mode="json"))
+
+
+@app.command("oil-scorecard")
+def oil_scorecard(
+    campaign: Annotated[str, typer.Option("--campaign")],
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Replay the append-only oil campaign scorecard without network access."""
+
+    from edgestack.oil.ledger import OilLedger
+
+    payload = OilLedger(artifacts / "oil" / "forward.sqlite").scorecard()
+    payload["campaign_id"] = campaign
+    console.print_json(data=payload)
+
+
+@app.command("oil-paper-mark")
+def oil_paper_mark(
+    decision_id: Annotated[str, typer.Option("--decision-id")],
+    horizon: Annotated[str, typer.Option("--horizon")],
+    lane: Annotated[str, typer.Option("--lane")],
+    price: Annotated[float, typer.Option("--price", min=0.000001)],
+    units: Annotated[float, typer.Option("--units", min=0)],
+    available_at: Annotated[str, typer.Option("--available-at")],
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Append an optional manual eToro paper mark; this is never an order."""
+
+    from edgestack.oil.ledger import OilLedger
+
+    inserted = OilLedger(artifacts / "oil" / "forward.sqlite").record_event(
+        decision_id,
+        horizon=horizon.upper(),
+        lane=lane.upper(),
+        event="ETORO_MARK",
+        available_at=_parse_iso_datetime(available_at, "--available-at"),
+        price=price,
+        units=units,
+        source="MANUAL_ETORO_PAPER_MARK",
+    )
+    console.print("Paper mark appended." if inserted else "Paper mark already present.")
+
+
+@app.command("oil-schedule")
+def oil_schedule(
+    paper_equity: Annotated[float, typer.Option("--paper-equity", min=0.01)],
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/oil-paper-v1.yaml"),
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Run the four fixed ET oil-paper refreshes until interrupted."""
+
+    import asyncio
+    import threading
+    from datetime import UTC
+
+    from edgestack.oil.decision import (
+        build_oil_snapshot,
+        fetch_oil_inputs,
+        load_oil_config,
+    )
+    from edgestack.oil.scheduler import build_oil_scheduler
+
+    resolved = load_oil_config(config)
+
+    def refresh(reason: str) -> None:
+        moment = datetime.now(UTC)
+        inputs = asyncio.run(
+            fetch_oil_inputs(as_of=moment, artifact_root=artifacts, config=resolved)
+        )
+        snapshot = build_oil_snapshot(
+            inputs,
+            paper_equity_usd=paper_equity,
+            as_of=moment,
+            config=resolved,
+            artifact_root=artifacts,
+        )
+        console.print(f"{reason}: {snapshot.status} ({snapshot.decision_id})")
+
+    scheduler = build_oil_scheduler(
+        refresh, schedule_config=cast(dict[str, object], resolved["scheduling"])
+    )
+    scheduler.start()
+    console.print("Oil paper scheduler started; Ctrl+C stops it.")
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        scheduler.shutdown(wait=False)
+
+
 @app.command("live-demo")
 def live_demo(
     database: Annotated[Path, typer.Option("--database")] = Path(
@@ -699,6 +900,35 @@ def _parse_iso_date(value: str | None, option_name: str) -> date | None:
             param_hint=option_name,
         )
     return parsed
+
+
+def _parse_iso_datetime(value: str, option_name: str) -> datetime:
+    """Parse a timezone-aware ISO timestamp, accepting the common Z suffix."""
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise typer.BadParameter(
+            "expected a timezone-aware ISO timestamp", param_hint=option_name
+        ) from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise typer.BadParameter(
+            "timestamp must include a UTC offset or Z", param_hint=option_name
+        )
+    return parsed
+
+
+def _parse_oil_as_of(value: str) -> datetime:
+    """Interpret date-only oil replays at the configured 08:30 ET checkpoint."""
+
+    from datetime import time
+    from zoneinfo import ZoneInfo
+
+    try:
+        day = date.fromisoformat(value)
+    except ValueError:
+        return _parse_iso_datetime(value, "--as-of")
+    return datetime.combine(day, time(8, 30), tzinfo=ZoneInfo("America/New_York"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,46 @@
+schema_version: 1
+campaign_id: oil-paper-v1-20260718-001
+paper_only: true
+outcome_proxy: USO
+basis_warning: >-
+  USO is the research outcome. It is not eToro's rolling WTI CFD; roll yield,
+  financing, trading hours, spread, and contract construction can materially differ.
+data:
+  start: 2006-04-10
+  proxies: [USO, BNO, XLE, XOP]
+  fred_series: [DCOILWTICO, DCOILBRENTEU, OVXCLS, DTWEXBGS]
+  eia_history_series: [WCESTUS1, W_EPC0_SAX_YCUOK_MBBL]
+  maximum_bar_age_sessions: 0
+research:
+  declared_real_candidates: 72
+  declared_placebo_candidates: 144
+  accounting_candidates: 216
+  default_swing_sessions: 3
+  horizons: [INTRADAY, SWING_1D, SWING_3D, SWING_5D]
+  forward_start: 2026-07-20
+  forward_end: 2028-07-20
+  freeze_limit_per_horizon_family: 1
+  historical_survivors: DIAGNOSTIC_ONLY
+decision:
+  maximum_spread_bps: 25.0
+  maximum_entry_gap_atr: 1.5
+  ovx_expanding_percentile: 0.90
+  atr_stop_multiple: 2.0
+  baseline_no_trade_sessions: [2026-07-20]
+  missing_operator_context: FAIL_CLOSED
+risk:
+  governed_fraction: 0.005
+  challenge_fractions: [0.01, 0.02, 0.05, 0.10]
+  governed_notional_cap: 1.0
+  challenge_notional_cap: 5.0
+  challenge_margin_cap: 0.50
+  challenge_termination_drawdown: 0.30
+  leverage_ladder: [1, 2, 5, 10]
+costs:
+  research_round_trip_bps: 20.0
+  pessimistic_stop_slippage_bps: 15.0
+scheduling:
+  pre_open_et: "08:30"
+  intraday_refresh_et: "09:50"
+  post_eia_refresh_et: "11:15"
+  swing_snapshot_et: "16:30"

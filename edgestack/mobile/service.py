@@ -12,7 +12,6 @@ from typing import Any, cast
 from edgestack.mobile.models import (
     AlignmentLayer,
     AnchorLeg,
-    TomPlan,
     ApiMeta,
     AuditItem,
     EntryInstruction,
@@ -28,7 +27,9 @@ from edgestack.mobile.models import (
     TailwindDay,
     TimingAdvisor,
     TimingAnchors,
+    TomPlan,
 )
+from edgestack.oil.models import OilSnapshot
 from edgestack.provenance import sha256_file
 
 
@@ -59,7 +60,8 @@ class MobileSnapshotService:
                 .joinpath("demo_snapshot.json")
                 .read_text(encoding="utf-8")
             )
-            return MobileSnapshot.model_validate(payload)
+            snapshot = MobileSnapshot.model_validate(payload)
+            return snapshot.model_copy(update={"oil": _oil_snapshot(self.artifact_root)})
         campaign = self._campaign_directory()
         holdout_path = campaign / "holdout" / "result.json"
         if not holdout_path.is_file():
@@ -83,6 +85,7 @@ class MobileSnapshotService:
             timing=advisors[0],
             timing_symbols=advisors,
             tom_plan=_tom_plan(self.artifact_root),
+            oil=_oil_snapshot(self.artifact_root),
         )
 
     def _campaign_directory(self) -> Path:
@@ -125,7 +128,8 @@ class MobileSnapshotService:
         *,
         timing: TimingAdvisor,
         timing_symbols: tuple[TimingAdvisor, ...] = (),
-        tom_plan: "TomPlan | None" = None,
+        tom_plan: TomPlan | None = None,
+        oil: OilSnapshot | None = None,
     ) -> MobileSnapshot:
         candidates = cast(list[dict[str, Any]], signal.get("candidates", []))
         if not candidates:
@@ -213,7 +217,20 @@ class MobileSnapshotService:
             timing=timing,
             timing_symbols=timing_symbols,
             tom_plan=tom_plan,
+            oil=oil,
         )
+
+
+def _oil_snapshot(artifact_root: Path) -> OilSnapshot | None:
+    """Load the latest validated oil payload without synthesizing missing facts."""
+
+    path = artifact_root / "oil" / "latest.json"
+    if not path.is_file():
+        return None
+    try:
+        return OilSnapshot.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def _horizon_plans(

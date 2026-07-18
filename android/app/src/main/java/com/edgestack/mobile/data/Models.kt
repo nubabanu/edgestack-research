@@ -196,6 +196,71 @@ data class TomPlan(
 )
 
 @Serializable
+data class OilDataGate(
+    val name: String,
+    val status: String,
+    @SerialName("as_of") val asOf: String? = null,
+    val reason: String,
+    @SerialName("raw_sha256") val rawSha256: List<String> = emptyList(),
+)
+
+@Serializable
+data class OilRiskLane(
+    val name: String,
+    val label: String,
+    @SerialName("risk_fraction") val riskFraction: Double,
+    val status: String,
+    @SerialName("equity_usd") val equityUsd: Double,
+    @SerialName("peak_equity_usd") val peakEquityUsd: Double,
+    @SerialName("drawdown_fraction") val drawdownFraction: Double,
+    val leverage: Double? = null,
+    @SerialName("notional_usd") val notionalUsd: Double,
+    @SerialName("margin_usd") val marginUsd: Double,
+    @SerialName("stop_fraction") val stopFraction: Double,
+    @SerialName("stressed_move_fraction") val stressedMoveFraction: Double,
+    @SerialName("maximum_planned_loss_usd") val maximumPlannedLossUsd: Double,
+    @SerialName("estimated_cost_usd") val estimatedCostUsd: Double,
+    val reason: String,
+)
+
+@Serializable
+data class OilHorizonDecision(
+    val horizon: String,
+    val status: String,
+    @SerialName("evidence_status") val evidenceStatus: String,
+    val direction: String,
+    @SerialName("proxy_symbol") val proxySymbol: String,
+    @SerialName("signal_session") val signalSession: String,
+    @SerialName("planned_entry") val plannedEntry: String,
+    @SerialName("planned_exit") val plannedExit: String,
+    @SerialName("reference_price_usd") val referencePriceUsd: Double? = null,
+    @SerialName("atr14_usd") val atr14Usd: Double? = null,
+    @SerialName("p99_adverse_gap_fraction") val p99AdverseGapFraction: Double,
+    @SerialName("active_vetoes") val activeVetoes: List<String>,
+    val reasons: List<String>,
+    val lanes: List<OilRiskLane>,
+)
+
+@Serializable
+data class OilSnapshot(
+    @SerialName("schema_version") val schemaVersion: String,
+    @SerialName("campaign_id") val campaignId: String,
+    @SerialName("decision_id") val decisionId: String,
+    @SerialName("generated_at") val generatedAt: String,
+    @SerialName("market_as_of") val marketAsOf: String,
+    val status: String,
+    val watermark: String,
+    @SerialName("outcome_proxy") val outcomeProxy: String,
+    @SerialName("basis_warning") val basisWarning: String,
+    @SerialName("proxy_agreement") val proxyAgreement: String,
+    @SerialName("data_gates") val dataGates: List<OilDataGate>,
+    val intraday: OilHorizonDecision,
+    val swing: OilHorizonDecision,
+    @SerialName("provenance_warnings") val provenanceWarnings: List<String> = emptyList(),
+    val disclaimer: String,
+)
+
+@Serializable
 data class MobileSnapshot(
     val meta: ApiMeta,
     @SerialName("campaign_id") val campaignId: String,
@@ -216,6 +281,7 @@ data class MobileSnapshot(
     val timing: TimingAdvisor,
     @SerialName("timing_symbols") val timingSymbols: List<TimingAdvisor> = emptyList(),
     @SerialName("tom_plan") val tomPlan: TomPlan? = null,
+    val oil: OilSnapshot? = null,
     val disclaimer: String,
 ) {
     fun validate(): MobileSnapshot {
@@ -281,6 +347,23 @@ data class MobileSnapshot(
         }
         require(timingSymbols.map { it.symbol }.distinct().size == timingSymbols.size) {
             "Timing symbols must be unique"
+        }
+        oil?.let { snapshot ->
+            require(snapshot.watermark.contains("NOT_AN_ORDER")) {
+                "Oil snapshot must remain paper-only"
+            }
+            val expectedLanes = listOf(
+                "GOVERNED_0_5",
+                "CHALLENGE_1",
+                "CHALLENGE_2",
+                "CHALLENGE_5",
+                "CHALLENGE_10",
+            )
+            require(snapshot.intraday.lanes.map { it.name } == expectedLanes)
+            require(snapshot.swing.lanes.map { it.name } == expectedLanes)
+            require(
+                snapshot.intraday.lanes.last().label.contains("HIGH_RISK_NON_PROMOTABLE"),
+            ) { "10% oil challenge lane must be visibly non-promotable" }
         }
         return this
     }

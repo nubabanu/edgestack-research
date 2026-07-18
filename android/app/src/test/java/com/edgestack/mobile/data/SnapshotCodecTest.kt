@@ -50,6 +50,21 @@ class SnapshotCodecTest {
     }
 
     @Test
+    fun `oil snapshot preserves five isolated paper risk lanes`() {
+        val root = Json.parseToJsonElement(validPayload()).jsonObject.toMutableMap()
+        root["oil"] = oilPayload()
+
+        val oil = SnapshotCodec.decode(JsonObject(root).toString()).oil!!
+
+        assertEquals("NO_TRADE", oil.status)
+        assertEquals(
+            listOf("GOVERNED_0_5", "CHALLENGE_1", "CHALLENGE_2", "CHALLENGE_5", "CHALLENGE_10"),
+            oil.intraday.lanes.map { it.name },
+        )
+        assertTrue(oil.intraday.lanes.last().label.contains("HIGH_RISK_NON_PROMOTABLE"))
+    }
+
+    @Test
     fun `remote demo stays visibly demo and is never classified as sealed network evidence`() {
         val sealed = SnapshotCodec.decode(validPayload())
         val demo = sealed.copy(
@@ -88,4 +103,27 @@ class SnapshotCodecTest {
           "disclaimer":"research only"
         }
     """.trimIndent()
+
+    private fun oilPayload(): JsonObject {
+        val lanes = """
+            [
+              {"name":"GOVERNED_0_5","label":"Governed research lane","risk_fraction":0.005,"status":"ACTIVE","equity_usd":100000.0,"peak_equity_usd":100000.0,"drawdown_fraction":0.0,"leverage":10.0,"notional_usd":10000.0,"margin_usd":1000.0,"stop_fraction":0.05,"stressed_move_fraction":0.06,"maximum_planned_loss_usd":500.0,"estimated_cost_usd":10.0,"reason":"risk-sized"},
+              {"name":"CHALLENGE_1","label":"Challenge 1%","risk_fraction":0.01,"status":"ACTIVE","equity_usd":100000.0,"peak_equity_usd":100000.0,"drawdown_fraction":0.0,"leverage":5.0,"notional_usd":20000.0,"margin_usd":4000.0,"stop_fraction":0.05,"stressed_move_fraction":0.06,"maximum_planned_loss_usd":1000.0,"estimated_cost_usd":20.0,"reason":"risk-sized"},
+              {"name":"CHALLENGE_2","label":"Challenge 2%","risk_fraction":0.02,"status":"ACTIVE","equity_usd":100000.0,"peak_equity_usd":100000.0,"drawdown_fraction":0.0,"leverage":5.0,"notional_usd":40000.0,"margin_usd":8000.0,"stop_fraction":0.05,"stressed_move_fraction":0.06,"maximum_planned_loss_usd":2000.0,"estimated_cost_usd":40.0,"reason":"risk-sized"},
+              {"name":"CHALLENGE_5","label":"Challenge 5%","risk_fraction":0.05,"status":"ACTIVE","equity_usd":100000.0,"peak_equity_usd":100000.0,"drawdown_fraction":0.0,"leverage":5.0,"notional_usd":100000.0,"margin_usd":20000.0,"stop_fraction":0.05,"stressed_move_fraction":0.06,"maximum_planned_loss_usd":5000.0,"estimated_cost_usd":100.0,"reason":"risk-sized"},
+              {"name":"CHALLENGE_10","label":"HIGH_RISK_NON_PROMOTABLE · 10% account risk","risk_fraction":0.10,"status":"ACTIVE","equity_usd":100000.0,"peak_equity_usd":100000.0,"drawdown_fraction":0.0,"leverage":5.0,"notional_usd":200000.0,"margin_usd":40000.0,"stop_fraction":0.05,"stressed_move_fraction":0.06,"maximum_planned_loss_usd":10000.0,"estimated_cost_usd":200.0,"reason":"risk-sized"}
+            ]
+        """.trimIndent()
+        val horizon = """
+            {"horizon":"INTRADAY","status":"NO_TRADE","evidence_status":"FORWARD_REQUIRED","direction":"LONG","proxy_symbol":"USO","signal_session":"2026-07-17","planned_entry":"2026-07-20 USO open","planned_exit":"2026-07-20 USO close","reference_price_usd":80.0,"atr14_usd":2.0,"p99_adverse_gap_fraction":0.01,"active_vetoes":["FROZEN_BASELINE"],"reasons":["forward required"],"lanes":$lanes}
+        """.trimIndent()
+        val swing = horizon
+            .replace("\"INTRADAY\"", "\"SWING_3D\"")
+            .replace("2026-07-20 USO close", "2026-07-23 USO close after three sessions")
+        return Json.parseToJsonElement(
+            """
+            {"schema_version":"1.0","campaign_id":"oil-paper-v1","decision_id":"oil-decision","generated_at":"2026-07-20T12:30:00Z","market_as_of":"2026-07-17","status":"NO_TRADE","watermark":"PAPER_ONLY_NOT_AN_ORDER","outcome_proxy":"USO","basis_warning":"USO is not the eToro rolling WTI CFD","proxy_agreement":"BULLISH","data_gates":[{"name":"PROXY_BARS","status":"PASS","as_of":"2026-07-20T12:30:00Z","reason":"causal","raw_sha256":[]}],"intraday":$horizon,"swing":$swing,"provenance_warnings":[],"disclaimer":"research only"}
+            """.trimIndent(),
+        ).jsonObject
+    }
 }

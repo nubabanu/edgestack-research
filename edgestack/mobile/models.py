@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from edgestack.disclaimer import DISCLAIMER
+from edgestack.oil.models import OilSnapshot
 
 
 class WireModel(BaseModel):
@@ -254,6 +255,8 @@ class MobileSnapshot(WireModel):
     # Present only while the turn-of-month campaign's preholdout AND holdout
     # gates are PASS in the catalog; absent otherwise (fail-closed).
     tom_plan: TomPlan | None = None
+    # Latest append-only oil-paper decision, when the local oil campaign has run.
+    oil: OilSnapshot | None = None
     disclaimer: str = DISCLAIMER
 
     def model_post_init(self, __context: object) -> None:
@@ -321,6 +324,6 @@ class MobileSnapshot(WireModel):
                 raise ValueError(
                     "an unavailable timing advisor cannot emit a calendar"
                 )
-        symbols = [advisor.symbol for advisor in self.timing_symbols]
-        if len(symbols) != len(set(symbols)):
+        advisor_symbols = [advisor.symbol for advisor in self.timing_symbols]
+        if len(advisor_symbols) != len(set(advisor_symbols)):
             raise ValueError("timing symbols must be unique")

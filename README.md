@@ -22,6 +22,7 @@ edgestack/
   scoring/       empirical-Bayes shrinkage and correlation-aware stack
   entrytiming/   governed indicators, timers, regimes, stops, interactions
   live/          paper scanner, monitor, SQLite outbox/ledger, scheduling
+  oil/           long-only oil research, paper decisions, risk lanes, ledger
   report/        daily rankings and output formats
   reversal/      top-K rule grid, residual features, rankers, purged studies
   storage/       immutable artifacts and SQLite campaign catalog
@@ -108,6 +109,28 @@ curves. It does not rewrite or promote the earlier 5-of-6 campaign.
 The exact resolved configuration is part of a campaign identity, so pass the same
 `--config` file to every command. The final holdout command is intentionally
 one-use: inspect the provisional report before invoking it.
+
+### Oil paper-decision system
+
+The isolated oil v1 subsystem is long-only and paper-only. It uses USO as the
+research outcome; USO is not equivalent to eToro's rolling WTI CFD. Its fixed
+counterfactual lanes risk 0.5%, 1%, 2%, 5%, and at most 10% of each lane's
+current paper equity. The 10% lane is permanently marked
+`HIGH_RISK_NON_PROMOTABLE`; leverage changes required paper margin, never the
+lane's planned-loss budget.
+
+```powershell
+edgestack oil-research --config configs/oil-paper-v1.yaml
+edgestack oil-context --spread-bps 8 --overnight-fee-usd-per-unit 0.01 --event-risk NORMAL --expires 2026-07-20T17:00:00-04:00
+edgestack oil-decision --paper-equity 100000 --as-of 2026-07-20
+edgestack oil-scorecard --campaign oil-paper-v1-20260718-001
+```
+
+Missing or expired operator context fails closed. Decisions are only
+`NO_TRADE`, `WATCH`, or `PAPER_LONG`; every decision and proxy lifecycle event
+is appended to a local SQLite ledger. `oil-schedule` installs the fixed ET
+pre-open, 09:50, post-EIA Wednesday, and 16:30 refreshes. No broker credential,
+order model, or order endpoint exists in this subsystem or its Android screen.
 
 ### Versioned rigor upgrades (opt-in, never retroactive)
 
