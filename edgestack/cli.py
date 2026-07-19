@@ -10,6 +10,7 @@ from typing import Annotated, cast
 import typer
 from rich.console import Console
 
+from edgestack.agenttools import app as agenttools_app
 from edgestack.config import load_config
 from edgestack.disclaimer import DISCLAIMER
 from edgestack.live.demo import run as run_demo
@@ -23,6 +24,7 @@ app = typer.Typer(
     epilog=DISCLAIMER,
 )
 console = Console()
+app.add_typer(agenttools_app, name="agent")
 
 
 @app.callback()

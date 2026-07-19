@@ -82,7 +82,23 @@ mypy edgestack                        # strict mode + pydantic plugin
 Pytest markers: `external` (live providers), `campaign` (long research runs),
 `integration`. The default suite is deterministic and provider-independent.
 
-Key CLI commands (`edgestack ...` or `python -m edgestack.cli ...`):
+### Agent toolbelt — start here
+
+`edgestack/agenttools.py` is the fast path built for AI agents: every command
+prints compact JSON (roughly 10x smaller than the raw reports), never raises
+(sections degrade to `NOT_AVAILABLE` with the reason), and preserves every
+honesty stamp. Prefer `python -m edgestack.agenttools` over `edgestack agent`
+for pure-JSON stdout (the CLI callback prints the disclaimer banner first).
+
+```powershell
+python -m edgestack.agenttools describe            # machine-readable command list
+python -m edgestack.agenttools overview            # offline system status in one call
+python -m edgestack.agenttools advise ACN --buy-date 2026-07-28
+python -m edgestack.agenttools compare ACN,CTSH,SPY
+python -m edgestack.agenttools calendar CTSH --publish   # feeds the Android app
+```
+
+Other key CLI commands (`edgestack ...` or `python -m edgestack.cli ...`):
 
 - `advise --symbol X [--buy-date YYYY-MM-DD]` — diagnostic timing report for any
   ticker (tailwinds/headwinds, alignment scan, buy-date rating)
