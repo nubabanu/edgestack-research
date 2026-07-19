@@ -80,9 +80,12 @@ def build_streams(
             decided = _monthly_signal(series, close[instrument], signal)
             # Entered at the month-end MOC; exposure starts the NEXT session.
             daily_position = (
-                decided.reindex(adjusted.index).ffill().fillna(False).shift(
-                    1, fill_value=False
-                )
+                decided.astype(float)
+                .reindex(adjusted.index)
+                .ffill()
+                .fillna(0.0)
+                .astype(bool)
+                .shift(1, fill_value=False)
             )
             gross = instrument_returns.where(daily_position.astype(bool))
             flips = decided.astype(int).diff().abs().fillna(0.0)
