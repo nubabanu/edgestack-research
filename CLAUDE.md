@@ -41,8 +41,10 @@ or closed.
   - `edges/` — edge studies: `turn_of_month.py` (validated), `reversal_edge.py`
     (validated basket), `_study_common.py` (shared gauntlet engine), and the
     closed failures: `trend_study.py`, `vix_study.py`, `overnight_study.py`,
-    `seasonal_study.py`, `lowvol_study.py`, `pairs_study.py`, `pead_study.py`
-    (see `docs/study-round-2026-07-19.md`)
+    `seasonal_study.py`, `lowvol_study.py`, `pairs_study.py`, `pead_study.py`,
+    `momentum_xs_study.py`, `high52_study.py`, `volshock_study.py`,
+    `preholiday_study.py` (see `docs/study-round-2026-07-19.md` and
+    `docs/study-round-2026-07-19b-menu.md`)
   - `stats/`, `validation/`, `backtest/`, `evaluation/`, `scoring/`, `pipeline/` —
     the gauntlet: HAC t-tests, stationary bootstrap, FDR, deflated Sharpe, SPA,
     CPCV/PBO, walk-forward, decay, holdout ceremony
