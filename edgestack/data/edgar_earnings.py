@@ -43,9 +43,11 @@ _CONCEPT_URL = (
 )
 _EPS_TAGS = ("EarningsPerShareDiluted", "EarningsPerShareBasic")
 _REQUESTS_PER_SECOND = 8
+# SEC fair-use policy requires an identifying User-Agent with a contact
+# address; the repo owner's public git-author email is the default contact.
 _USER_AGENT = os.environ.get(
     "EDGESTACK_EDGAR_USER_AGENT",
-    "EdgeStack-research/0.1 (+https://github.com/nubabanu/edgestack-research)",
+    "EdgeStack research (yucelnumankaradavut@gmail.com)",
 )
 
 WATERMARKS = (

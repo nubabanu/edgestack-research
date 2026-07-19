@@ -1,5 +1,20 @@
 # Study round 2026-07-19 — seasonal, low-vol, pairs, PEAD
 
+> **Same-day update:** the PEAD data block was lifted hours after it was
+> declared — the free SEC EDGAR feed (`edgestack/data/edgar_earnings.py`,
+> see `docs/free-data-feeds.md`) supplied point-in-time 8-K acceptance
+> timestamps and XBRL quarterly EPS for the whole panel (18,639
+> announcements, 26,824 quarters, zero failed symbols). The preregistered
+> `pead-study-v2-20260719-001` (commit `5d192b0`, declared before
+> evaluation) then **FAILED** its preholdout: no survivors, SPA p=0.198,
+> placebo survival 0%. Net means were 3.8/1.3/−5.0 bp per active day for
+> the three trials (t ≤ 1.26), every trial failed walk-forward, and the 4x
+> cost ladder was deeply negative — the freshest-announcement variant lost
+> money outright (terminal wealth 0.39). Consistent with the documented
+> post-2000 attenuation of the drift in large caps (Chordia et al.), which
+> the preregistration flagged as the likely outcome. Full evidence:
+> `artifacts/campaigns/pead-study-v2-20260719-001/preholdout/result.json`.
+
 Four documented anomaly families were considered in this round. Three were
 preregistered (commit `bdd7bff`, before any evaluation ran) and evaluated
 once each through the shared gauntlet (`edgestack/edges/_study_common.py`)

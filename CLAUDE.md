@@ -41,8 +41,8 @@ or closed.
   - `edges/` — edge studies: `turn_of_month.py` (validated), `reversal_edge.py`
     (validated basket), `_study_common.py` (shared gauntlet engine), and the
     closed failures: `trend_study.py`, `vix_study.py`, `overnight_study.py`,
-    `seasonal_study.py`, `lowvol_study.py`, `pairs_study.py` (see
-    `docs/study-round-2026-07-19.md`; PEAD blocked in `configs/pead-study-v1.yaml`)
+    `seasonal_study.py`, `lowvol_study.py`, `pairs_study.py`, `pead_study.py`
+    (see `docs/study-round-2026-07-19.md`)
   - `stats/`, `validation/`, `backtest/`, `evaluation/`, `scoring/`, `pipeline/` —
     the gauntlet: HAC t-tests, stationary bootstrap, FDR, deflated Sharpe, SPA,
     CPCV/PBO, walk-forward, decay, holdout ceremony
@@ -66,8 +66,11 @@ or closed.
 - Setup: `py -3.12 -m venv .venv` then `pip install -e ".[dev,live,confirm,ml]"`,
   or exact lock: `uv sync --all-extras --frozen`.
 - Android: Gradle + Java 21 (`cd android && gradle testDebugUnitTest`).
-- Data needs no API keys (Stooq first, Yahoo whole-series fallback). Optional env:
-  `TIINGO_API_KEY`, `FINNHUB_API_KEY`, `EDGESTACK_TELEGRAM_TOKEN`/`_CHAT`.
+- Data needs no API keys (Stooq first, Yahoo whole-series fallback; SEC EDGAR
+  earnings feed via `python -m edgestack.data.edgar_earnings` — see
+  `docs/free-data-feeds.md`). Optional env: `TIINGO_API_KEY`,
+  `FINNHUB_API_KEY`, `EDGESTACK_TELEGRAM_TOKEN`/`_CHAT`, and
+  `ALPACA_KEY_ID`/`ALPACA_SECRET_KEY` (enables forward intraday capture).
   Never put tokens in YAML. `d_us_txt.zip` (537 MB, repo root, hash-pinned) is the
   Stooq bulk archive for full-universe campaigns.
 
