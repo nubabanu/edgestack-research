@@ -306,6 +306,29 @@ def run_post_close(
         )
     )
     equities = tuple(sorted({item.asset.symbol for item in memberships}))
+    # Point-in-time membership snapshot: one immutable file per session. From
+    # the first snapshot onward the forward universe is survivorship-free by
+    # construction; the historical panel's bias stays stamped, not fixed.
+    snapshot_dir = base / "artifacts" / "universe"
+    snapshot_path = snapshot_dir / f"membership-{as_of.isoformat()}.json"
+    if not snapshot_path.is_file():
+        import json as json_module
+
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_text(
+            json_module.dumps(
+                {
+                    "as_of": as_of.isoformat(),
+                    "source": "Wikipedia current S&P 500 membership",
+                    "watermark": "POINT_IN_TIME_FROM_CAPTURE_DATE_ONLY",
+                    "symbols": list(equities),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     campaign_root = base / "artifacts" / "campaigns" / campaign_id
     ledger = ForwardLedger(campaign_root / "forward" / "ledger.sqlite")
     ledger_symbols = {

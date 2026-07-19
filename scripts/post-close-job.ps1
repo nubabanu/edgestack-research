@@ -17,5 +17,8 @@ $log = "artifacts/advisor/post-close-job.log"
 New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 "=== post-close run $(Get-Date -Format o) ===" | Out-File $log -Append
 python -m edgestack.cli post-close 2>&1 | Out-File $log -Append
-"=== exit $LASTEXITCODE $(Get-Date -Format o) ===" | Out-File $log -Append
-exit $LASTEXITCODE
+$postCloseExit = $LASTEXITCODE
+# Forward intraday capture (no-op without free Alpaca keys); never fails the job.
+python -m edgestack.data.intraday_collector 2>&1 | Out-File $log -Append
+"=== exit $postCloseExit $(Get-Date -Format o) ===" | Out-File $log -Append
+exit $postCloseExit
