@@ -38,9 +38,11 @@ or closed.
 - `edgestack/` — Python package (CLI entry: `edgestack.cli:app`)
   - `data/` — providers (Stooq→Yahoo free chain, Tiingo/Finnhub keyed), immutable
     cache, QA, calendars, `universe.py` (Wikipedia S&P 500 + 9 liquid ETFs)
-  - `edges/` — edge studies: `turn_of_month.py` (validated), `trend_study.py`,
-    `vix_study.py`, `overnight_study.py` (closed failures), `reversal_edge.py`,
-    `_study_common.py` (shared gauntlet engine)
+  - `edges/` — edge studies: `turn_of_month.py` (validated), `reversal_edge.py`
+    (validated basket), `_study_common.py` (shared gauntlet engine), and the
+    closed failures: `trend_study.py`, `vix_study.py`, `overnight_study.py`,
+    `seasonal_study.py`, `lowvol_study.py`, `pairs_study.py` (see
+    `docs/study-round-2026-07-19.md`; PEAD blocked in `configs/pead-study-v1.yaml`)
   - `stats/`, `validation/`, `backtest/`, `evaluation/`, `scoring/`, `pipeline/` —
     the gauntlet: HAC t-tests, stationary bootstrap, FDR, deflated Sharpe, SPA,
     CPCV/PBO, walk-forward, decay, holdout ceremony
