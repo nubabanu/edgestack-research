@@ -369,6 +369,19 @@ def describe() -> None:
                     "args": {"--campaign": "optional campaign id filter"},
                     "network": False,
                 },
+                "leverage-check": {
+                    "args": {
+                        "SYMBOL": "any US ticker",
+                        "--leverage": "leverage to stress (default 5)",
+                        "--horizon": "sessions per position (default 60)",
+                        "--years": "history depth (default 20)",
+                    },
+                    "network": True,
+                    "returns": (
+                        "liquidation rate, median outcome, and max leverage at"
+                        " 95% survival under any/calm/calm+dip entries"
+                    ),
+                },
             },
             "honesty_contract": (
                 "outputs keep every status stamp, watermark, and disclaimer;"
@@ -544,6 +557,129 @@ def gates_command(
     """Campaign gate results from the catalog (read-only)."""
 
     _emit(_gate_rows(root.resolve(), campaign))
+
+
+def _leverage_assessment(
+    frame: Any, symbol: str, *, leverage: float, horizon: int
+) -> dict[str, Any]:
+    """Path-based liquidation analysis for one symbol at one leverage.
+
+    Assumptions are declared, not hidden: entry at the NEXT session's close
+    after a signal day; a position is closed out when the intraday adjusted
+    low breaches a 0.5/leverage excursion (a 50% maintenance close-out,
+    executed cleanly at the threshold — real overnight gaps make the true
+    tail WORSE); entry windows overlap, so samples are dependent.
+    """
+
+    import numpy as np
+    import pandas as pd
+
+    bars = (
+        frame.loc[frame["symbol"] == symbol.upper()].set_index("session").sort_index()
+    )
+    close = bars["close"].astype(float)
+    adjusted = bars["adjusted_close"].astype(float)
+    low = bars["low"].astype(float)
+    high = bars["high"].astype(float)
+    returns = adjusted.pct_change()
+    adjusted_low = low * adjusted / close
+    sma200 = close.rolling(200, min_periods=200).mean()
+    vol20 = returns.rolling(20, min_periods=20).std() * np.sqrt(252.0)
+    delta = close.diff()
+    gain = delta.clip(lower=0).ewm(alpha=0.5, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=0.5, adjust=False).mean()
+    rsi2 = 100.0 - 100.0 / (1.0 + gain / loss.replace(0.0, np.nan))
+    span = (high - low).replace(0.0, np.nan)
+    ibs = ((close - low) / span).fillna(0.5)
+    down3 = (returns < 0) & (returns.shift(1) < 0) & (returns.shift(2) < 0)
+    dip = (rsi2 < 10.0) | down3 | (ibs < 0.2)
+    calm = (close > sma200) & (vol20 < 0.30)
+    conditions = {
+        "any_entry": sma200.notna(),
+        "calm_regime": calm.fillna(False),
+        "calm_and_dip": (calm & dip).fillna(False),
+    }
+    liq_threshold = 0.5 / leverage
+    report: dict[str, Any] = {}
+    for name, mask in conditions.items():
+        indices = np.flatnonzero(mask.to_numpy())
+        outcomes: list[float] = []
+        excursions: list[float] = []
+        liquidated = 0
+        for i in indices:
+            if i + 1 + horizon >= len(bars):
+                continue
+            entry = float(adjusted.iloc[i + 1])
+            # Excursions strictly AFTER the entry close; the entry session's
+            # own low happened before the fill and cannot stop us out.
+            path_low = float(adjusted_low.iloc[i + 2 : i + 2 + horizon].min())
+            excursion = 1.0 - path_low / entry
+            excursions.append(excursion)
+            if excursion >= liq_threshold:
+                liquidated += 1
+                outcomes.append(-0.5)
+            else:
+                outcomes.append(
+                    leverage * (float(adjusted.iloc[i + 1 + horizon]) / entry - 1.0)
+                )
+        if len(outcomes) < 8:
+            report[name] = {"status": "TOO_FEW_ENTRIES", "n": len(outcomes)}
+            continue
+        excursion_95 = float(np.quantile(excursions, 0.95))
+        report[name] = {
+            "n": len(outcomes),
+            "liquidated_fraction": round(liquidated / len(outcomes), 3),
+            "median_levered_outcome": round(float(np.median(outcomes)), 3),
+            "excursion_95pct": round(excursion_95, 4),
+            "max_leverage_95pct_survival": (
+                round(0.5 / excursion_95, 2) if excursion_95 > 0 else None
+            ),
+            "small_sample_warning": len(outcomes) < 50,
+        }
+    currently_calm = bool(calm.iloc[-1]) if len(calm) else False
+    return {
+        "status": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER",
+        "symbol": symbol.upper(),
+        "as_of_session": str(pd.Timestamp(bars.index.max()).date()),
+        "leverage_tested": leverage,
+        "horizon_sessions": horizon,
+        "close_out_rule": (
+            f"intraday adjusted-low excursion >= {liq_threshold:.1%}"
+            " (50% maintenance, clean fill assumed; real gaps are worse)"
+        ),
+        "conditions": report,
+        "calm_regime_now": currently_calm,
+        "calm_regime_definition": "close > 200-session SMA and 20-session vol < 30%",
+        "caveats": [
+            "OVERLAPPING_WINDOWS_DEPENDENT_SAMPLES",
+            "CLEAN_LIQUIDATION_ASSUMED_GAPS_MAKE_TAILS_WORSE",
+            "95PCT_PER_POSITION_SURVIVAL_STILL_IMPLIES_REGULAR_CLOSE_OUTS_OVER_YEARS",
+            "ENTRY_RULES_MOVE_MEDIANS_NOT_PATH_RISK",
+        ],
+    }
+
+
+@app.command("leverage-check")
+def leverage_check_command(
+    symbol: Annotated[str, typer.Argument(help="Ticker, e.g. MU.")],
+    leverage: Annotated[float, typer.Option("--leverage", min=1.0, max=25.0)] = 5.0,
+    horizon: Annotated[int, typer.Option("--horizon", min=5, max=252)] = 60,
+    years: Annotated[int, typer.Option("--years", min=2, max=60)] = 20,
+) -> None:
+    """Liquidation risk at a given leverage, under the known entry filters."""
+
+    def _build() -> dict[str, Any]:
+        from edgestack.disclaimer import DISCLAIMER
+
+        frame, warnings = _fetch_bars(symbol, years)
+        payload = _leverage_assessment(
+            frame, symbol, leverage=leverage, horizon=horizon
+        )
+        payload["provenance_warnings"] = list(warnings)
+        payload["disclaimer"] = DISCLAIMER
+        return payload
+
+    _emit(_guarded(_build))
 
 
 if __name__ == "__main__":
