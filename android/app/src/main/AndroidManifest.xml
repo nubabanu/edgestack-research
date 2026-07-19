@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="EdgeStack Paper"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.EdgeStack">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Debug-only adb self-test hook; onReceive no-ops in release. -->
+        <receiver
+            android:name=".data.DebugSelfTestReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.edgestack.mobile.SELF_TEST" />
+                <action android:name="com.edgestack.mobile.SEED_AUTOCONNECT" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

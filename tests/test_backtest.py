@@ -427,3 +427,76 @@ def test_empty_signal_is_invalid_not_an_empirical_verdict(
 
     assert records[0].execution_status is ExecutionStatus.INVALID
     assert records[0].verdict is None
+
+
+def test_corwin_schultz_recovers_the_spread_of_a_flat_tape() -> None:
+    from edgestack.data.spreads import corwin_schultz_spread
+
+    sessions = pd.bdate_range("2024-01-02", periods=40)
+    # Zero-volatility tape: the entire daily range IS the spread.
+    high = pd.Series(100.1, index=sessions)
+    low = pd.Series(99.9, index=sessions)
+    spread = corwin_schultz_spread(high, low)
+    expected = float(np.log(100.1 / 99.9))
+    assert spread.iloc[1:].notna().all()
+    np.testing.assert_allclose(spread.iloc[1:], expected, rtol=1e-4)
+
+
+def test_monthly_median_spreads_reject_thin_months() -> None:
+    from edgestack.data.spreads import monthly_median_spread_bps
+
+    sessions = pd.bdate_range("2024-01-02", periods=30)
+    high = pd.DataFrame({"AAA": 100.1}, index=sessions)
+    low = pd.DataFrame({"AAA": 99.9}, index=sessions)
+    close = pd.DataFrame({"AAA": 100.0}, index=sessions)
+    monthly = monthly_median_spread_bps(high, low, close, minimum_observations=12)
+    assert monthly.loc["2024-01", "AAA"] == pytest.approx(
+        float(np.log(100.1 / 99.9)) * 10_000.0, rel=1e-4
+    )
+    # February holds too few sessions in this fixture to qualify.
+    assert np.isnan(monthly.loc["2024-02", "AAA"])
+
+
+def test_floored_spread_matrix_lags_a_month_and_never_undercuts_baseline() -> None:
+    from edgestack.data.spreads import floored_spread_matrix
+
+    monthly = pd.DataFrame(
+        {"AAA": [12.0, 1.0]},
+        index=pd.PeriodIndex(["2024-01", "2024-02"], freq="M"),
+    )
+    sessions = pd.DatetimeIndex(["2024-01-15", "2024-02-15", "2024-03-15"])
+    matrix = floored_spread_matrix(monthly, sessions, baseline_bps=3.0)
+    # January has no prior-month estimate; February uses January's 12 bps;
+    # March's measured 1 bps is floored at the 3 bps baseline.
+    assert matrix.loc[sessions[0], "AAA"] == 3.0
+    assert matrix.loc[sessions[1], "AAA"] == 12.0
+    assert matrix.loc[sessions[2], "AAA"] == 3.0
+
+
+def test_portfolio_costs_measured_spread_override_is_floored_and_applied() -> None:
+    positions = np.array([[0.0, 0.0], [1.0, 1.0]])
+    baseline = CostModel().portfolio_costs(
+        positions, asset_type=("equity", "equity"), adv_dollars=1_000_000_000.0
+    )
+    measured = CostModel().portfolio_costs(
+        positions,
+        asset_type=("equity", "equity"),
+        adv_dollars=1_000_000_000.0,
+        full_spread_bps=np.full_like(positions, 9.0),
+    )
+    # 9 bps vs the assumed 3 bps: two names each pay 3 extra half-spread bps.
+    assert (measured[1] - baseline[1]) * 10_000 == pytest.approx(6.0)
+    with pytest.raises(ValueError, match="floored at the"):
+        CostModel().portfolio_costs(
+            positions,
+            asset_type=("equity", "equity"),
+            adv_dollars=1_000_000_000.0,
+            full_spread_bps=np.full_like(positions, 1.0),
+        )
+    with pytest.raises(ValueError, match="align with the positions"):
+        CostModel().portfolio_costs(
+            positions,
+            asset_type=("equity", "equity"),
+            adv_dollars=1_000_000_000.0,
+            full_spread_bps=np.array([9.0, 9.0]),
+        )

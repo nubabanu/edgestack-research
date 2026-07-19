@@ -90,6 +90,42 @@ def causal_spy_ma200_regimes(close: pd.DataFrame) -> CausalTrendRegimes:
     )
 
 
+def causal_realized_vol_terciles(
+    prices: pd.Series,
+    *,
+    window: int = 21,
+    breakpoint_end: pd.Timestamp | None = None,
+) -> pd.Series:
+    """Label each return date by the prior session's trailing realized-vol tercile.
+
+    Volatility on date ``t`` uses close-to-close returns through ``t-1`` only.
+    Tercile breakpoints come from sessions strictly before ``breakpoint_end``
+    (typically the holdout start) so labels applied inside a sealed window use
+    no information from that window; without a boundary the full sample sets
+    the breakpoints and the labels are descriptive only.
+    """
+
+    values = pd.to_numeric(prices, errors="coerce")
+    volatility = values.pct_change().rolling(window).std().shift(1)
+    volatility = volatility.rename("volatility_regime")
+    if breakpoint_end is not None:
+        reference = volatility.loc[volatility.index < breakpoint_end]
+    else:
+        reference = volatility
+    reference = reference.dropna()
+    if len(reference) < 3 * window:
+        return pd.Series("UNKNOWN", index=volatility.index, dtype="object").rename(
+            "volatility_regime"
+        )
+    low, high = reference.quantile([1.0 / 3.0, 2.0 / 3.0])
+    labels = pd.Series("UNKNOWN", index=volatility.index, dtype="object")
+    known = volatility.notna()
+    labels[known & (volatility <= low)] = "VOL_LOW"
+    labels[known & (volatility > low) & (volatility <= high)] = "VOL_MID"
+    labels[known & (volatility > high)] = "VOL_HIGH"
+    return labels.rename("volatility_regime")
+
+
 def trend_regime_interaction(
     returns: FloatArray | list[float],
     regimes: CausalTrendRegimes,

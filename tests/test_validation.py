@@ -11,6 +11,7 @@ from edgestack.validation.cpcv import (
 from edgestack.validation.decay import DecayPoint, classify_decay, fixed_decay
 from edgestack.validation.lookahead import assert_prefix_invariant, shift_and_collapse
 from edgestack.validation.regimes import (
+    causal_realized_vol_terciles,
     CausalTrendRegimes,
     causal_spy_ma200_regimes,
     trend_regime_interaction,
@@ -143,6 +144,57 @@ def test_ma200_regime_labels_are_lagged_one_session() -> None:
     assert regimes.labels.iloc[199] == "UNKNOWN"
     assert regimes.labels.iloc[200] == "UP"
     assert regimes.current_regime == "UP"
+
+
+def test_vol_tercile_labels_are_causal_and_use_preboundary_breakpoints() -> None:
+    dates = pd.bdate_range("2020-01-01", periods=400)
+    rng = np.random.default_rng(7)
+    calm = rng.normal(0.0, 0.001, 200)
+    stormy = rng.normal(0.0, 0.05, 200)
+    prices = pd.Series(100.0 * np.cumprod(1.0 + np.r_[calm, stormy]), index=dates)
+    labels = causal_realized_vol_terciles(
+        prices, breakpoint_end=pd.Timestamp(dates[300])
+    )
+    assert set(labels.unique()) <= {"UNKNOWN", "VOL_LOW", "VOL_MID", "VOL_HIGH"}
+    # The first window+1 sessions cannot have a trailing-vol label.
+    assert (labels.iloc[:22] == "UNKNOWN").all()
+    # Post-boundary stormy sessions land in the top tercile of the
+    # pre-boundary distribution.
+    assert (labels.iloc[330:] == "VOL_HIGH").all()
+
+
+def test_vol_terciles_with_thin_reference_stay_unknown() -> None:
+    dates = pd.bdate_range("2020-01-01", periods=30)
+    prices = pd.Series(np.linspace(100.0, 110.0, 30), index=dates)
+    labels = causal_realized_vol_terciles(prices)
+    assert (labels == "UNKNOWN").all()
+
+
+def test_holdout_regime_stratification_is_report_only_and_complete() -> None:
+    from edgestack.pipeline.runner import _holdout_regime_stratification
+
+    dates = pd.bdate_range("2020-01-01", periods=400)
+    rng = np.random.default_rng(11)
+    close = pd.DataFrame(
+        {"SPY": 100.0 * np.cumprod(1.0 + rng.normal(0.0004, 0.01, 400))},
+        index=dates,
+    )
+    holdout_dates = dates[300:]
+    stream = pd.Series(rng.normal(0.0002, 0.005, len(holdout_dates)), index=holdout_dates)
+    payload = _holdout_regime_stratification(
+        {"edge": stream},
+        stream.rename("composite"),
+        close,
+        holdout_start=pd.Timestamp(holdout_dates[0]),
+    )
+    assert payload["policy"] == "REPORT_ONLY_NO_GATE_EFFECT"
+    assert set(payload["streams"]) == {"edge", "composite"}
+    trend = payload["streams"]["edge"]["trend"]
+    volatility = payload["streams"]["edge"]["volatility"]
+    assert sum(entry["n"] for entry in trend.values()) == len(holdout_dates)
+    assert sum(entry["n"] for entry in volatility.values()) == len(holdout_dates)
+    for entry in list(trend.values()) + list(volatility.values()):
+        assert set(entry) == {"n", "mean", "hac_t"}
 
 
 def test_hac_regime_interaction_recovers_hand_calculated_means() -> None:

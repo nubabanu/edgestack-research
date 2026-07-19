@@ -89,6 +89,35 @@ class GateStatus(StrEnum):
     NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
+class DataTier(StrEnum):
+    """Evidence tier for time-varying security and event data."""
+
+    POINT_IN_TIME = "POINT_IN_TIME"
+    PIT_APPROXIMATION = "PIT_APPROXIMATION"
+    SURVIVORSHIP_BIASED = "SURVIVORSHIP_BIASED"
+
+
+class MarketRecordKind(StrEnum):
+    """Canonical intraday record kind."""
+
+    MINUTE_BAR = "MINUTE_BAR"
+    NBBO = "NBBO"
+    TRADE = "TRADE"
+    IMBALANCE = "IMBALANCE"
+    AUCTION_PRINT = "AUCTION_PRINT"
+
+
+class CorporateEventKind(StrEnum):
+    """Preregistered event taxonomy used by V2 vetoes."""
+
+    EARNINGS = "EARNINGS"
+    PRELIMINARY_RESULTS = "PRELIMINARY_RESULTS"
+    GUIDANCE = "GUIDANCE"
+    TRADING_HALT = "TRADING_HALT"
+    DIVIDEND = "DIVIDEND"
+    SPLIT = "SPLIT"
+
+
 class RecommendationState(StrEnum):
     """Persistent paper-recommendation state."""
 
@@ -126,6 +155,30 @@ class AssetKey:
     symbol: str
     exchange: str = "US"
     asset_type: str = "equity"
+
+
+@dataclass(frozen=True, slots=True)
+class SecurityIdentity:
+    """Permanent security identity independent of ticker history."""
+
+    security_id: str
+    issuer_id: str | None = None
+    source: str = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class TickerValidityInterval:
+    """Ticker mapping whose knowledge time is distinct from its effective time."""
+
+    security_id: str
+    ticker: str
+    exchange: str
+    valid_from: datetime
+    valid_to: datetime | None
+    available_at: datetime
+    source: str
+    fetched_at: datetime
+    content_hash: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +255,64 @@ class MembershipInterval:
     end: date | None
     sector: str | None = None
     available_at: datetime | None = None
+    security_id: str | None = None
+    source: str = "unknown"
+    data_tier: DataTier = DataTier.SURVIVORSHIP_BIASED
+    fetched_at: datetime | None = None
+    content_hash: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CorporateEvent:
+    """Vintage-aware corporate event known at a causal decision time."""
+
+    event_id: str
+    security_id: str
+    kind: CorporateEventKind
+    event_time: datetime
+    available_at: datetime
+    source: str
+    revision: str
+    fetched_at: datetime
+    content_hash: str
+    sentiment: float | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class EstimateVintage:
+    """One historical consensus estimate vintage."""
+
+    estimate_id: str
+    security_id: str
+    metric: str
+    period_end: date
+    value: float
+    event_time: datetime
+    available_at: datetime
+    revision: str
+    source: str
+    fetched_at: datetime
+    content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class IntradayMarketRecord:
+    """Normalized quote, trade, imbalance, print, or minute bar."""
+
+    security_id: str
+    kind: MarketRecordKind
+    event_time: datetime
+    available_at: datetime
+    source: str
+    revision: str
+    fetched_at: datetime
+    content_hash: str
+    price: float | None = None
+    size: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,6 +564,9 @@ class HoldoutFreezeManifest:
     lock_sha256: str
     model_mapping_sha256: str
     data_snapshot_id: str
+    # Bound at score time; freeze documents written before evaluator
+    # versioning existed carry the original sign-only semantics.
+    holdout_evaluator_version: str = "SIGN_V1"
 
 
 @runtime_checkable
@@ -479,6 +593,26 @@ class UniverseSource(Protocol):
 
     async def memberships(self, start: date, end: date) -> Sequence[MembershipInterval]:
         """Return known membership intervals."""
+
+
+@runtime_checkable
+class CorporateEventSource(Protocol):
+    """Vintage-aware corporate-event provider."""
+
+    async def fetch_events(
+        self, security_ids: Sequence[str], start: datetime, end: datetime
+    ) -> Sequence[CorporateEvent]:
+        """Return event vintages with explicit availability timestamps."""
+
+
+@runtime_checkable
+class IntradayMarketSource(Protocol):
+    """Provider for entitlement-aware intraday records."""
+
+    async def fetch_intraday(
+        self, security_ids: Sequence[str], start: datetime, end: datetime
+    ) -> Sequence[IntradayMarketRecord]:
+        """Return normalized records without weakening requested coverage."""
 
 
 @runtime_checkable

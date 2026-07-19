@@ -7,8 +7,13 @@ from typing import NoReturn
 import pandas as pd
 import pytest
 
-from edgestack.config import EdgeStackConfig, PathsConfig
+from edgestack.config import EdgeStackConfig, HoldoutGateConfig, PathsConfig
 from edgestack.models import GateStatus, StackArtifact
+from edgestack.pipeline.holdout import (
+    evaluate_holdout_gate,
+    promotion_decision,
+    retro_ci_diagnostic,
+)
 from edgestack.pipeline.runner import CampaignRunner
 from edgestack.provenance import canonical_sha256
 from edgestack.scoring.stacking import StackResult
@@ -97,6 +102,178 @@ def _persist_empty_result(runner: CampaignRunner, freeze: dict[str, object]) -> 
     result["result_sha256"] = result_sha
     runner._write_json("holdout_result", "holdout/result.json", result)
     return result_sha
+
+
+def test_sign_v1_gate_reproduces_original_sign_semantics() -> None:
+    decision = evaluate_holdout_gate(
+        evaluator_version="SIGN_V1",
+        edge_means={"edge": 0.0001},
+        edge_cis={"edge": (-0.01, 0.01)},
+        has_edges=True,
+        composite_mean=0.0001,
+        composite_ci=(-0.01, 0.01),
+        overlay_increments={"overlay": 0.0},
+    )
+    assert decision.research_gate_pass
+    assert decision.edge_ci_lower_positive is None
+    assert decision.composite_ci_lower_positive is None
+    negative = evaluate_holdout_gate(
+        evaluator_version="SIGN_V1",
+        edge_means={"edge": -0.0001},
+        edge_cis={},
+        has_edges=True,
+        composite_mean=0.5,
+        composite_ci=None,
+        overlay_increments={},
+    )
+    assert not negative.research_gate_pass
+
+
+def test_ci_v2_gate_rejects_positive_mean_with_nonpositive_ci_lower() -> None:
+    decision = evaluate_holdout_gate(
+        evaluator_version="CI_V2",
+        edge_means={"edge": 0.0001},
+        edge_cis={"edge": (-0.01, 0.02)},
+        has_edges=True,
+        composite_mean=0.0001,
+        composite_ci=(0.00001, 0.02),
+        overlay_increments={},
+    )
+    assert decision.edge_positive
+    assert decision.edge_ci_lower_positive is False
+    assert not decision.research_gate_pass
+
+
+def test_ci_v2_gate_fails_closed_when_an_edge_ci_is_missing() -> None:
+    decision = evaluate_holdout_gate(
+        evaluator_version="CI_V2",
+        edge_means={"edge": 0.01},
+        edge_cis={},
+        has_edges=True,
+        composite_mean=0.01,
+        composite_ci=(0.001, 0.02),
+        overlay_increments={},
+    )
+    assert decision.edge_ci_lower_positive is False
+    assert not decision.research_gate_pass
+
+
+def test_ci_v2_gate_passes_when_every_ci_lower_bound_is_positive() -> None:
+    decision = evaluate_holdout_gate(
+        evaluator_version="CI_V2",
+        edge_means={"edge": 0.01},
+        edge_cis={"edge": (0.001, 0.02)},
+        has_edges=True,
+        composite_mean=0.01,
+        composite_ci=(0.001, 0.02),
+        overlay_increments={"overlay": 0.0},
+    )
+    assert decision.research_gate_pass
+
+
+def test_unknown_evaluator_version_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown holdout evaluator"):
+        evaluate_holdout_gate(
+            evaluator_version="SIGN_V3",
+            edge_means={},
+            edge_cis={},
+            has_edges=False,
+            composite_mean=None,
+            composite_ci=None,
+            overlay_increments={},
+        )
+
+
+def test_smoke_profile_can_never_promote() -> None:
+    assert not promotion_decision(
+        research_gate_pass=True, has_edges=True, profile="smoke"
+    )
+    assert promotion_decision(research_gate_pass=True, has_edges=True, profile="full")
+    assert not promotion_decision(
+        research_gate_pass=True, has_edges=False, profile="full"
+    )
+
+
+def test_retro_diagnostic_reads_only_the_sealed_document() -> None:
+    report = retro_ci_diagnostic(
+        {
+            "campaign_id": "c1",
+            "result_sha256": "sha",
+            "research_gate_pass": True,
+            "edge_means": {"edge": 0.0001},
+            "edge_mean_cis": {"edge": [-0.01, 0.02]},
+            "evaluated_edge_ids": ["edge"],
+            "composite_mean": 0.0001,
+            "composite_mean_ci": [-0.01, 0.02],
+            "overlay_incremental_means": {},
+        }
+    )
+    assert report["policy"] == "POST_HOLDOUT_DIAGNOSTIC_REPORT_ONLY"
+    assert report["sealed_research_gate_pass"] is True
+    assert report["ci_v2_would_pass"] is False
+
+
+def test_finalize_refuses_an_evaluator_version_not_bound_at_freeze_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, _ = _scored_runner(tmp_path, monkeypatch)
+    runner.config = runner.config.model_copy(
+        update={"holdout_gate": HoldoutGateConfig(evaluator_version="CI_V2")}
+    )
+    with pytest.raises(RuntimeError, match="evaluator version differs"):
+        runner.finalize_holdout()
+    assert runner.catalog.holdout_access(runner.campaign_id) is None
+
+
+def test_ci_v2_freeze_binds_the_evaluator_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "edgestack.pipeline.runner.source_tree_sha256", lambda _root: "source-tree"
+    )
+    config = EdgeStackConfig(
+        paths=PathsConfig(root=tmp_path),
+        holdout_gate=HoldoutGateConfig(evaluator_version="CI_V2"),
+    )
+    runner = CampaignRunner.create(
+        config, campaign_id="holdout-governance-v2", as_of=date(2024, 12, 31)
+    )
+    runner._write_json(
+        "data_manifest", "data/manifest.json", {"snapshot_id": "snapshot-1"}
+    )
+    runner._write_json("hypothesis_registry", "discovery/specs.json", [])
+    runner._write_parquet(
+        "canonical_bars",
+        "data/bars.parquet",
+        pd.DataFrame(
+            {
+                "symbol": ["SPY"],
+                "session": [pd.Timestamp("2024-12-31")],
+                "adjusted_close": [100.0],
+            }
+        ),
+    )
+    runner._write_parquet(
+        "universe_memberships",
+        "data/universe.parquet",
+        pd.DataFrame({"symbol": ["SPY"], "sector": ["ETF"]}),
+    )
+    runner._write_json(
+        "provisional_overlay_evidence",
+        "reports/provisional/overlay_evidence.json",
+        {"decisions": {}, "evidence": {}, "neighborhoods": {}},
+    )
+    empty_stack = StackResult(
+        StackArtifact("empty", (), {}, {}, {}, 0.0, False),
+        pd.Series(dtype=float, name="composite"),
+    )
+    monkeypatch.setattr(runner, "_build_provisional_stack", lambda: empty_stack)
+    for phase in ("data", "replication", "discovery", "validation", "report"):
+        runner.gates.record(phase, True, "fixture pass")
+    assert runner.score().status is GateStatus.PASS
+    freeze = runner._read_json("score/freeze.json")
+    assert isinstance(freeze, dict)
+    assert freeze["holdout_evaluator_version"] == "CI_V2"
 
 
 def test_frozen_artifact_tampering_is_rejected_before_access(

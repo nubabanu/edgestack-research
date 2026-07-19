@@ -1,0 +1,474 @@
+{
+  "meta": {
+    "schema_version": "1.6",
+    "generated_at": "2026-07-15T21:20:01.559063Z",
+    "market_as_of": "2026-07-15_CLOSE",
+    "source": "Packaged demonstration fixture",
+    "mode": "DEMO",
+    "stale": true
+  },
+  "campaign_id": "demo-reversal-edge-v1",
+  "model_name": "CURRENT_SP500_RAW_5D_REVERSAL_TOP5_HALF_GROSS",
+  "model_status": "DEMO",
+  "bias_tier": "SURVIVORSHIP_BIASED",
+  "watermark": "SURVIVORSHIP_BIASED \u00b7 DEMO DATA",
+  "basket_rule": "The five names form one inseparable demonstration basket. Confidence is ordinal, not a probability. No order will be sent.",
+  "instruction": {
+    "entry_session": "2026-07-16",
+    "entry_order": "MOC",
+    "submit_by_et": "15:45 America/New_York",
+    "exit_session": "2026-07-23",
+    "exit_order": "MOC",
+    "no_chase": "If the closing-auction cutoff is missed, wait for a new completed-close scan.",
+    "cancel_if": [
+      "Quote is stale or unavailable",
+      "Membership changed",
+      "Closing-auction cutoff was missed",
+      "The complete basket cannot be implemented"
+    ]
+  },
+  "portfolio": {
+    "paper_capital_usd": 100000.0,
+    "target_gross": 0.5,
+    "maximum_name_weight": 0.1,
+    "risk_budget_per_name_usd": 500.0,
+    "shorts_enabled": false
+  },
+  "recommendations": [
+    {
+      "recommendation_id": "demo-ibm",
+      "rank": 1,
+      "symbol": "IBM",
+      "direction": "LONG",
+      "confidence_ordinal": 100,
+      "signal_close_usd": 211.2,
+      "trailing_return": -0.300778,
+      "suggested_shares": 15,
+      "reference_stop_usd": 179.59,
+      "event_risk": "HIGH \u00b7 preliminary earnings miss"
+    },
+    {
+      "recommendation_id": "demo-erie",
+      "rank": 2,
+      "symbol": "ERIE",
+      "direction": "LONG",
+      "confidence_ordinal": 100,
+      "signal_close_usd": 210.19,
+      "trailing_return": -0.163789,
+      "suggested_shares": 26,
+      "reference_stop_usd": 191.44,
+      "event_risk": "HIGH \u00b7 unresolved single-day repricing"
+    },
+    {
+      "recommendation_id": "demo-app",
+      "rank": 3,
+      "symbol": "APP",
+      "direction": "LONG",
+      "confidence_ordinal": 100,
+      "signal_close_usd": 452.73,
+      "trailing_return": -0.133,
+      "suggested_shares": 7,
+      "reference_stop_usd": 387.88,
+      "event_risk": "HIGH \u00b7 elevated volatility"
+    },
+    {
+      "recommendation_id": "demo-pnr",
+      "rank": 4,
+      "symbol": "PNR",
+      "direction": "LONG",
+      "confidence_ordinal": 99,
+      "signal_close_usd": 64.33,
+      "trailing_return": -0.121895,
+      "suggested_shares": 72,
+      "reference_stop_usd": 57.45,
+      "event_risk": "HIGH \u00b7 guidance cut and CFO departure"
+    },
+    {
+      "recommendation_id": "demo-pgr",
+      "rank": 5,
+      "symbol": "PGR",
+      "direction": "LONG",
+      "confidence_ordinal": 99,
+      "signal_close_usd": 205.22,
+      "trailing_return": -0.118849,
+      "suggested_shares": 35,
+      "reference_stop_usd": 191.12,
+      "event_risk": "HIGH \u00b7 post-results repricing"
+    }
+  ],
+  "skipped": [],
+  "holdout": {
+    "status": "PASS",
+    "start": "2023-07-14",
+    "end": "2026-07-14",
+    "observations": 752,
+    "expected_sessions": 752,
+    "net_mean": 0.0007011333539236128,
+    "benchmark_excess_mean": 0.00031124759492657107,
+    "terminal_wealth": 1.6440875201799787,
+    "benchmark_wealth": 1.329036224385104,
+    "freeze_id": "demo-a5550be02ae6",
+    "result_sha256": "demo-44ce0448a99f"
+  },
+  "audit": [
+    {
+      "occurred_at": "2026-07-15T21:17:10Z",
+      "event_type": "HOLDOUT_SEALED",
+      "message": "Demonstration holdout evidence was sealed for replay."
+    },
+    {
+      "occurred_at": "2026-07-15T21:20:01Z",
+      "event_type": "SIGNAL_FROZEN",
+      "message": "Five-name paper basket created from the completed daily bar."
+    }
+  ],
+  "horizons": [
+    {
+      "horizon": "WEEK",
+      "status": "CONDITIONAL_PAPER_SIGNAL",
+      "title": "Five-session reversal basket",
+      "holding_period": "Five earned close-to-close intervals",
+      "entry_rule": "Revalidate at 15:30\u201315:45 ET and submit the complete basket as MOC for 2026-07-16.",
+      "review_rule": "Refresh after every completed daily bar; confidence is ordinal, not a probability.",
+      "exit_rule": "Exit the complete basket MOC on 2026-07-23 unless a risk cancellation occurs.",
+      "recommendation_scope": "BASKET",
+      "symbols": [
+        "IBM",
+        "ERIE",
+        "APP",
+        "PNR",
+        "PGR"
+      ],
+      "evidence": "Demonstration of the promoted five-day basket contract; individual ranks are not standalone forecasts.",
+      "invalidation": [
+        "Quote is stale or unavailable",
+        "Membership changed",
+        "Closing-auction cutoff was missed",
+        "The complete basket cannot be implemented"
+      ],
+      "unlock_requirement": "Available only for the complete basket and exact timing contract."
+    },
+    {
+      "horizon": "MONTH",
+      "status": "DATA_UNAVAILABLE",
+      "title": "No validated monthly stock recommendation",
+      "holding_period": "Approximately 21 NYSE sessions",
+      "entry_rule": "Do not stretch the five-day reversal signal into a one-month trade.",
+      "review_rule": "Wait for an independently frozen monthly model and untouched forward evidence.",
+      "exit_rule": "No monthly exit is authorized because no monthly recommendation is emitted.",
+      "recommendation_scope": "NONE",
+      "symbols": [],
+      "evidence": "The promoted campaign did not validate a standalone 21-session stock-selection model.",
+      "invalidation": [
+        "Any monthly ticker inferred from the weekly ranking is invalid."
+      ],
+      "unlock_requirement": "Requires preregistration, costs, OOS validation, confirmation, freeze, and a new holdout."
+    },
+    {
+      "horizon": "YEAR",
+      "status": "DATA_UNAVAILABLE",
+      "title": "No validated one-year stock recommendation",
+      "holding_period": "Approximately 252 NYSE sessions",
+      "entry_rule": "Do not use a five-day oversold move as a one-year investment thesis.",
+      "review_rule": "Require point-in-time fundamentals and a separately validated long-horizon model.",
+      "exit_rule": "No annual exit is authorized because no annual recommendation is emitted.",
+      "recommendation_scope": "NONE",
+      "symbols": [],
+      "evidence": "EdgeStack has no frozen promoted 252-session single-stock model in this campaign.",
+      "invalidation": [
+        "Any annual ticker inferred from the weekly ranking is invalid."
+      ],
+      "unlock_requirement": "Requires a new causal annual study, full cost/OOS gauntlet, freeze, and future holdout."
+    }
+  ],
+  "sniper": {
+    "status": "NO_TRADE",
+    "objective": "LOSS_FIRST",
+    "candidate_symbols": [
+      "IBM",
+      "ERIE",
+      "APP",
+      "PNR",
+      "PGR"
+    ],
+    "max_name_weight": 0.05,
+    "max_gross_exposure": 0.25,
+    "max_planned_loss_per_name_usd": 100.0,
+    "max_planned_basket_loss_usd": 500.0,
+    "execution_window": "Revalidate 15:30-15:45 ET; complete-basket MOC only.",
+    "alignments": [
+      {
+        "horizon": "YEAR",
+        "status": "UNVALIDATED",
+        "evidence": "No promoted 252-session regime or stock-selection model exists."
+      },
+      {
+        "horizon": "MONTH",
+        "status": "UNVALIDATED",
+        "evidence": "No promoted 21-session model exists."
+      },
+      {
+        "horizon": "WEEK",
+        "status": "PASS",
+        "evidence": "The five-session reversal basket has a sealed PASS holdout."
+      },
+      {
+        "horizon": "DAY",
+        "status": "PENDING",
+        "evidence": "Fresh quotes, membership, news, halts, and MOC availability require pre-close revalidation."
+      }
+    ],
+    "hard_vetoes": [
+      "YEAR_ALIGNMENT_UNVALIDATED",
+      "MONTH_ALIGNMENT_UNVALIDATED",
+      "DAY_REVALIDATION_PENDING",
+      "HIGH_EVENT_RISK_IN_WEEKLY_BASKET"
+    ],
+    "release_condition": "Remain NO TRADE until all four layers are independently validated and pass on the same causal snapshot.",
+    "stop_warning": "Planned loss is a sizing budget, not a guarantee. Stops can gap, slip, whipsaw, or fail to execute at the trigger price.",
+    "validation_status": "RISK_OVERLAY_NOT_VALIDATED_ALPHA"
+  },
+  "loss_aware_v2": {
+    "namespace": "loss-aware-v2",
+    "evidence_status": "FORWARD_REQUIRED",
+    "selected_horizon": "NONE",
+    "selected_leverage": 1.0,
+    "ranking": "LOSS_FIRST",
+    "loss_metrics": {
+      "status": "DATA_UNAVAILABLE",
+      "loss_probability": null,
+      "expected_shortfall_95": null,
+      "maximum_adverse_excursion": null,
+      "tenth_percentile_return": null,
+      "losing_streak_p90": null
+    },
+    "data_gates": [
+      {
+        "name": "PIT_MEMBERSHIP",
+        "status": "DATA_UNAVAILABLE",
+        "reason": "Wikipedia reconstruction is PIT_APPROXIMATION, not genuine point-in-time membership."
+      },
+      {
+        "name": "ESTIMATE_VINTAGES",
+        "status": "DATA_UNAVAILABLE",
+        "reason": "Historical consensus vintages are not configured."
+      },
+      {
+        "name": "AUCTION_EXECUTION",
+        "status": "DATA_UNAVAILABLE",
+        "reason": "NBBO, trades, imbalances, and official auction prints are not configured."
+      }
+    ],
+    "enabled_event_vetoes": [],
+    "timing": "NO TRADE; monthly/yearly timing unlocks only after forward evidence and all gates pass."
+  },
+  "disclaimer": "EdgeStack is for research and educational purposes only. It is NOT financial advice. No trading edge is guaranteed; documented anomalies decay after publication (McLean & Pontiff 2016 found returns 58% lower post-publication) and often disappear after realistic transaction costs. Most classic technical analysis has no standalone edge on liquid US large caps after costs; timing overlays here are for execution, timing, and risk management, not alpha generation. Backtests use free, survivorship-biased data unless stated otherwise and overstate real performance. Live alerts are computed from free, potentially 15-minute-delayed data and may be stale or wrong; a 'recommendation holds' confirmation is a statistical statement, not a promise. Past performance does not predict future results. Do not trade real capital based on this output without independent professional advice and your own due diligence.",
+  "timing": {
+    "status": "AVAILABLE",
+    "symbol": "SPY",
+    "as_of_session": "2026-07-14",
+    "policy": "DEMO: score = sum of DSR-reliability-weighted, family-shrunk condition means active that session; win score = reliability-weighted blend of active-condition hit rates shrunk toward 50",
+    "anchors": {
+      "status": "TWO_ANCHORS_ONLY",
+      "best_buy_anchor": "CLOSE_AUCTION (decide by 15:45 ET, fill ~16:00 ET; captures the overnight leg)",
+      "matching_sell_anchor": "next OPEN_AUCTION (~09:30 ET)",
+      "overnight": {
+        "n": 5020,
+        "mean_daily_bp": 3.2,
+        "hit_rate": 0.556
+      },
+      "intraday": {
+        "n": 5020,
+        "mean_daily_bp": 1.8,
+        "hit_rate": 0.54
+      },
+      "finer_granularity": "DATA_UNAVAILABLE beyond the two auction anchors: daily bars hold no hourly prices"
+    },
+    "calendar": [
+      {
+        "session": "2026-07-15",
+        "weekday": "WED",
+        "win_score": 56,
+        "expected_daily_bp": 2.9,
+        "conditions": [
+          "weekday=WED"
+        ]
+      },
+      {
+        "session": "2026-07-16",
+        "weekday": "THU",
+        "win_score": 55,
+        "expected_daily_bp": 2.3,
+        "conditions": [
+          "weekday=THU"
+        ]
+      },
+      {
+        "session": "2026-07-17",
+        "weekday": "FRI",
+        "win_score": 55,
+        "expected_daily_bp": 2.4,
+        "conditions": [
+          "weekday=FRI",
+          "opex_week"
+        ]
+      },
+      {
+        "session": "2026-07-31",
+        "weekday": "FRI",
+        "win_score": 57,
+        "expected_daily_bp": 3.4,
+        "conditions": [
+          "weekday=FRI",
+          "turn_of_month",
+          "month_end_window"
+        ]
+      }
+    ],
+    "diagnostic_watermark": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER: win scores are reliability-weighted historical hit rates, not success probabilities"
+  },
+  "timing_symbols": [
+    {
+      "status": "AVAILABLE",
+      "symbol": "SPY",
+      "as_of_session": "2026-07-14",
+      "policy": "DEMO: score = sum of DSR-reliability-weighted, family-shrunk condition means active that session; win score = reliability-weighted blend of active-condition hit rates shrunk toward 50",
+      "anchors": {
+        "status": "TWO_ANCHORS_ONLY",
+        "best_buy_anchor": "CLOSE_AUCTION (decide by 15:45 ET, fill ~16:00 ET; captures the overnight leg)",
+        "matching_sell_anchor": "next OPEN_AUCTION (~09:30 ET)",
+        "overnight": {
+          "n": 5020,
+          "mean_daily_bp": 3.2,
+          "hit_rate": 0.556
+        },
+        "intraday": {
+          "n": 5020,
+          "mean_daily_bp": 1.8,
+          "hit_rate": 0.54
+        },
+        "finer_granularity": "DATA_UNAVAILABLE beyond the two auction anchors: daily bars hold no hourly prices"
+      },
+      "calendar": [
+        {
+          "session": "2026-07-15",
+          "weekday": "WED",
+          "win_score": 56,
+          "expected_daily_bp": 2.9,
+          "conditions": [
+            "weekday=WED"
+          ]
+        },
+        {
+          "session": "2026-07-16",
+          "weekday": "THU",
+          "win_score": 55,
+          "expected_daily_bp": 2.3,
+          "conditions": [
+            "weekday=THU"
+          ]
+        },
+        {
+          "session": "2026-07-17",
+          "weekday": "FRI",
+          "win_score": 55,
+          "expected_daily_bp": 2.4,
+          "conditions": [
+            "weekday=FRI",
+            "opex_week"
+          ]
+        },
+        {
+          "session": "2026-07-31",
+          "weekday": "FRI",
+          "win_score": 57,
+          "expected_daily_bp": 3.4,
+          "conditions": [
+            "weekday=FRI",
+            "turn_of_month",
+            "month_end_window"
+          ]
+        }
+      ],
+      "diagnostic_watermark": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER: win scores are reliability-weighted historical hit rates, not success probabilities"
+    },
+    {
+      "status": "AVAILABLE",
+      "symbol": "QQQ",
+      "as_of_session": "2026-07-14",
+      "policy": "DEMO: score = sum of DSR-reliability-weighted, family-shrunk condition means active that session; win score = reliability-weighted blend of active-condition hit rates shrunk toward 50",
+      "anchors": {
+        "status": "TWO_ANCHORS_ONLY",
+        "best_buy_anchor": "CLOSE_AUCTION (decide by 15:45 ET, fill ~16:00 ET; captures the overnight leg)",
+        "matching_sell_anchor": "next OPEN_AUCTION (~09:30 ET)",
+        "overnight": {
+          "n": 5020,
+          "mean_daily_bp": 3.2,
+          "hit_rate": 0.556
+        },
+        "intraday": {
+          "n": 5020,
+          "mean_daily_bp": 1.8,
+          "hit_rate": 0.54
+        },
+        "finer_granularity": "DATA_UNAVAILABLE beyond the two auction anchors: daily bars hold no hourly prices"
+      },
+      "calendar": [
+        {
+          "session": "2026-07-15",
+          "weekday": "WED",
+          "win_score": 56,
+          "expected_daily_bp": 2.9,
+          "conditions": [
+            "weekday=WED"
+          ]
+        },
+        {
+          "session": "2026-07-16",
+          "weekday": "THU",
+          "win_score": 55,
+          "expected_daily_bp": 2.3,
+          "conditions": [
+            "weekday=THU"
+          ]
+        },
+        {
+          "session": "2026-07-17",
+          "weekday": "FRI",
+          "win_score": 55,
+          "expected_daily_bp": 2.4,
+          "conditions": [
+            "weekday=FRI",
+            "opex_week"
+          ]
+        },
+        {
+          "session": "2026-07-31",
+          "weekday": "FRI",
+          "win_score": 57,
+          "expected_daily_bp": 3.4,
+          "conditions": [
+            "weekday=FRI",
+            "turn_of_month",
+            "month_end_window"
+          ]
+        }
+      ],
+      "diagnostic_watermark": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER: win scores are reliability-weighted historical hit rates, not success probabilities"
+    }
+  ],
+  "tom_plan": {
+    "state": "WAIT",
+    "symbol": "SPY",
+    "direction": "LONG",
+    "entry_session": "2026-07-30",
+    "entry_order": "MOC",
+    "first_exposure_session": "2026-07-31",
+    "exit_session": "2026-08-05",
+    "exit_order": "MOC",
+    "maximum_allocation_usd": 10000.0,
+    "sizing": "floor(min(10000 USD, 10 percent of paper equity) / entry price)",
+    "stop": "DISABLED_NOT_VALIDATED",
+    "evidence": "DEMO: sealed single-use holdout PASS; McConnell & Xu (2008) zero-parameter calendar rule"
+  }
+}

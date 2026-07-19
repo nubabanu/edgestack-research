@@ -1,0 +1,54 @@
+# Recommended template for NEW full campaigns. Existing campaign configs are
+# frozen into their manifests and must not be edited; this template binds the
+# stricter LITERATURE_V2 evidence protocol (Romano-Wolf FWE control,
+# t >= 3.8 time-series / 3.4 cross-sectional discovery hurdles, studentized
+# stationary Sharpe intervals), the CI_V2 holdout evaluator (bootstrap CI
+# lower bound must be positive, not just the mean's sign), and the extended
+# hypothesis families including preregistered calendar-gated combinations.
+profile: full
+data:
+  start: 1960-01-01
+  reconciliation_method: action_stratified_returns
+  providers:
+    order:
+    - tiingo
+    - stooq
+    - yfinance
+    stooq_bulk_archive: d_us_txt.zip
+    stooq_bulk_sha256: 973fccc87775d4de06b54a052c1ca9d5131065f2c22c158bcc3090d8ef5d81de
+    concurrency: 4
+    max_attempts: 6
+    timeout_seconds: 30.0
+stats:
+  seed: 42
+  bootstrap_reps: 2000
+  finalist_bootstrap_reps: 10000
+  family_alpha: 0.05
+  survivor_causality_checks: true
+protocol:
+  version: LITERATURE_V2
+  replication_policy: EXECUTION_WITH_EMPIRICAL_DIAGNOSTICS
+  time_series_t_threshold: 3.8
+  cross_sectional_t_threshold: 3.4
+  require_romano_wolf: true
+  romano_wolf_alpha: 0.05
+  sharpe_interval: STUDENTIZED_STATIONARY
+  revision_context: POST_REPLICATION_PRE_DISCOVERY
+  capacity_capital_multipliers:
+  - 1.0
+  - 10.0
+  - 100.0
+  - 1000.0
+holdout_gate:
+  evaluator_version: CI_V2
+grid:
+  max_interaction_order: 2
+  min_observations: 100
+  # Declares the post-original families (quarter/month-end flow windows,
+  # Amihud illiquidity, MAX-lottery, overnight/intraday gap, ETF relative
+  # reversal) plus the sixteen preregistered calendar-gated combination
+  # candidates. They enter the same placebo/DSR/SPA/Romano-Wolf gauntlet and
+  # honestly expand the declared trial count.
+  extended_families: true
+live:
+  enabled: false

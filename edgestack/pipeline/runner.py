@@ -17,9 +17,13 @@ from typing import Any, Self, cast
 import numpy as np
 import pandas as pd
 
-from edgestack.backtest.costs import CostModel
+from edgestack.backtest.costs import DEFAULT_ADV_FALLBACK_DOLLARS, CostModel
 from edgestack.backtest.engine import vectorized_backtest
-from edgestack.config import EdgeStackConfig, dump_resolved_config
+from edgestack.config import (
+    EdgeStackConfig,
+    HoldoutGateConfig,
+    dump_resolved_config,
+)
 from edgestack.data.cache import DataCache
 from edgestack.data.calendars import NYSECalendar
 from edgestack.data.quality import write_qa_report
@@ -44,7 +48,12 @@ from edgestack.pipeline.campaign_data import (
     synthetic_replication_inputs,
 )
 from edgestack.pipeline.gates import Gatekeeper
-from edgestack.pipeline.holdout import HoldoutGuard
+from edgestack.pipeline.holdout import (
+    HOLDOUT_EVALUATOR_VERSIONS,
+    HoldoutGuard,
+    evaluate_holdout_gate,
+    promotion_decision,
+)
 from edgestack.pipeline.research import (
     canonical_spec_payload,
     prepare_research,
@@ -181,24 +190,23 @@ class CampaignRunner:
         manifest = catalog.campaign(campaign_id)
         if manifest is None:
             raise KeyError(f"unknown campaign: {campaign_id}")
-        expected = canonical_sha256(config.model_dump(mode="json"))
-        legacy_payload = config.model_dump(mode="json")
-        legacy_payload.pop("protocol", None)
-        legacy_expected = canonical_sha256(legacy_payload)
-        legacy_match = (
+        variants = [config.model_dump(mode="json")]
+        trimmed = _without_default_config_extensions(config.model_dump(mode="json"))
+        variants.append(trimmed)
+        for payload in list(variants):
+            extension_payload = dict(payload)
+            extension_payload.pop("reversal", None)
+            variants.append(extension_payload)
+        if (
             config.protocol.version == "FROZEN_V1"
             and "evidence_protocol" not in manifest
-            and manifest.get("config_sha256") == legacy_expected
-        )
-        extension_payload = config.model_dump(mode="json")
-        extension_payload.pop("reversal", None)
-        extension_expected = canonical_sha256(extension_payload)
-        extension_match = manifest.get("config_sha256") == extension_expected
-        if (
-            manifest.get("config_sha256") != expected
-            and not legacy_match
-            and not extension_match
         ):
+            for payload in list(variants):
+                legacy_payload = dict(payload)
+                legacy_payload.pop("protocol", None)
+                variants.append(legacy_payload)
+        candidates = {canonical_sha256(payload) for payload in variants}
+        if manifest.get("config_sha256") not in candidates:
             raise RuntimeError(
                 "campaign config hash differs; use the exact frozen config or create a new campaign"
             )
@@ -751,6 +759,8 @@ class CampaignRunner:
                     if self.config.profile == "smoke"
                     else "FULL_EMPIRICAL"
                 ),
+                "smoke_mechanical_override": self.config.profile == "smoke"
+                and not bundle.passed,
                 "disclaimer": DISCLAIMER,
             }
             self._write_json("validation_summary", "validation/summary.json", evidence)
@@ -904,6 +914,12 @@ class CampaignRunner:
             "non_promotable": self.config.profile == "smoke",
             "disclaimer": DISCLAIMER,
         }
+        # SIGN_V1 freezes stay byte-identical to pre-versioning documents; a
+        # non-default evaluator is bound into the frozen identity here.
+        if self.config.holdout_gate.evaluator_version != "SIGN_V1":
+            freeze_payload["holdout_evaluator_version"] = (
+                self.config.holdout_gate.evaluator_version
+            )
         freeze_payload["freeze_id"] = "freeze-" + canonical_sha256(freeze_payload)
         self._write_json("holdout_freeze", "score/freeze.json", freeze_payload)
         evidence = {
@@ -939,6 +955,19 @@ class CampaignRunner:
         self.gates.require_previous("holdout")
         freeze_payload = self._read_json("score/freeze.json")
         freeze = self._freeze_manifest(freeze_payload)
+        if freeze.holdout_evaluator_version not in HOLDOUT_EVALUATOR_VERSIONS:
+            raise RuntimeError(
+                "frozen holdout evaluator version is unknown: "
+                f"{freeze.holdout_evaluator_version}"
+            )
+        if (
+            self.config.holdout_gate.evaluator_version
+            != freeze.holdout_evaluator_version
+        ):
+            raise RuntimeError(
+                "holdout evaluator version differs from the frozen manifest; "
+                "the gate must run under the version bound at score time"
+            )
         guard = HoldoutGuard(self.catalog)
 
         # Holdout access is consumed before data is exposed. If the analytical
@@ -1045,18 +1074,19 @@ class CampaignRunner:
                     else pd.Series(dtype=float)
                 ),
             )
-            edge_positive = all(value > 0.0 for value in edge_means.values())
-            composite_positive = not freeze.edge_ids or (
-                composite_mean is not None and composite_mean > 0.0
+            decision = evaluate_holdout_gate(
+                evaluator_version=freeze.holdout_evaluator_version,
+                edge_means=edge_means,
+                edge_cis=edge_cis,
+                has_edges=bool(freeze.edge_ids),
+                composite_mean=composite_mean,
+                composite_ci=composite_ci,
+                overlay_increments=overlay_increments,
             )
-            overlays_nonnegative = all(
-                value >= 0.0 for value in overlay_increments.values()
-            )
-            research_pass = (
-                edge_positive and composite_positive and overlays_nonnegative
-            )
-            promoted = bool(
-                research_pass and freeze.edge_ids and self.config.profile == "full"
+            promoted = promotion_decision(
+                research_gate_pass=decision.research_gate_pass,
+                has_edges=bool(freeze.edge_ids),
+                profile=self.config.profile,
             )
             result = {
                 "campaign_id": self.campaign_id,
@@ -1070,15 +1100,30 @@ class CampaignRunner:
                 "composite_mean": composite_mean,
                 "composite_mean_ci": composite_ci,
                 "overlay_incremental_means": overlay_increments,
-                "edge_positive": edge_positive,
-                "composite_positive": composite_positive,
-                "overlays_nonnegative": overlays_nonnegative,
-                "research_gate_pass": research_pass,
+                "edge_positive": decision.edge_positive,
+                "composite_positive": decision.composite_positive,
+                "overlays_nonnegative": decision.overlays_nonnegative,
+                "research_gate_pass": decision.research_gate_pass,
                 "promoted_for_paper_assistant": promoted,
                 "empty_model_successful_outcome": not freeze.edge_ids,
                 "non_promotable_smoke": self.config.profile == "smoke",
                 "disclaimer": DISCLAIMER,
             }
+            # SIGN_V1 result documents stay byte-identical to the original
+            # schema; evaluator metadata and report-only regime stratification
+            # exist only under versioned evaluators.
+            if freeze.holdout_evaluator_version != "SIGN_V1":
+                result["holdout_evaluator_version"] = freeze.holdout_evaluator_version
+                result["edge_ci_lower_positive"] = decision.edge_ci_lower_positive
+                result["composite_ci_lower_positive"] = (
+                    decision.composite_ci_lower_positive
+                )
+                result["regime_stratification"] = _holdout_regime_stratification(
+                    holdout_streams,
+                    composite,
+                    prepared.close,
+                    holdout_start=pd.Timestamp(self.holdout_start),
+                )
             result_sha = canonical_sha256(result)
             result["result_sha256"] = result_sha
             if not composite.empty:
@@ -1129,6 +1174,9 @@ class CampaignRunner:
                 lock_sha256=str(payload["lock_sha256"]),
                 model_mapping_sha256=str(payload["model_mapping_sha256"]),
                 data_snapshot_id=str(payload["data_snapshot_id"]),
+                holdout_evaluator_version=str(
+                    payload.get("holdout_evaluator_version", "SIGN_V1")
+                ),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise RuntimeError(
@@ -1343,7 +1391,7 @@ class CampaignRunner:
             close.mul(volume)
             .rolling(20, min_periods=1)
             .mean()
-            .fillna(100_000_000.0)
+            .fillna(DEFAULT_ADV_FALLBACK_DOLLARS)
             .to_numpy(float)
         )
         types_by_symbol = (
@@ -1524,7 +1572,7 @@ class CampaignRunner:
             .rolling(20, min_periods=1)
             .mean()
             .reindex(composite.index)
-            .fillna(100_000_000.0)
+            .fillna(DEFAULT_ADV_FALLBACK_DOLLARS)
         )
         vix = pd.Series(dtype=float)
         if {"session", "VIXCLS"}.issubset(factors.columns):
@@ -1717,6 +1765,9 @@ class CampaignRunner:
     def _report_figures(self, records: Any, *, final: bool) -> dict[str, str]:
         """Persist report PNGs and return data URIs for self-contained HTML."""
 
+        import matplotlib
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         directory = (
@@ -2038,6 +2089,92 @@ def _resolve(base: Path, path: Path) -> Path:
     return path.resolve() if path.is_absolute() else (base / path).resolve()
 
 
+def _holdout_regime_stratification(
+    holdout_streams: dict[str, pd.Series],
+    composite: pd.Series,
+    close: pd.DataFrame,
+    *,
+    holdout_start: pd.Timestamp,
+) -> dict[str, Any]:
+    """Report-only per-regime breakdown of the holdout return streams.
+
+    Never feeds the promotion gate: a three-year holdout holds too few
+    DOWN-trend or high-vol observations to gate on honestly, so this only
+    makes concentration of the result in one regime visible in the record.
+    """
+
+    from edgestack.validation.regimes import (
+        causal_realized_vol_terciles,
+        causal_spy_ma200_regimes,
+    )
+
+    trend = causal_spy_ma200_regimes(close)
+    spy = close["SPY"] if "SPY" in close.columns else pd.Series(dtype=float)
+    vol_labels = causal_realized_vol_terciles(spy, breakpoint_end=holdout_start)
+    streams = dict(holdout_streams)
+    if not composite.empty:
+        streams["composite"] = composite
+    label_sets = {"trend": trend.labels, "volatility": vol_labels}
+    stratification: dict[str, Any] = {
+        "policy": "REPORT_ONLY_NO_GATE_EFFECT",
+        "trend_source": trend.source,
+        "volatility_source": (
+            "SPY trailing 21-session realized vol terciles; breakpoints from "
+            "pre-holdout sessions only; labels lagged one session"
+        ),
+        "streams": {},
+    }
+    for name, stream in sorted(streams.items()):
+        per_stream: dict[str, Any] = {}
+        for kind, labels in label_sets.items():
+            aligned = labels.reindex(stream.index).fillna("UNKNOWN").astype(str)
+            per_kind: dict[str, Any] = {}
+            for regime in sorted(aligned.unique()):
+                sample = stream[(aligned == regime) & stream.notna()]
+                values = sample.to_numpy(float)
+                test = hac_mean_test(values)
+                per_kind[regime] = {
+                    "n": int(values.size),
+                    "mean": float(np.mean(values)) if values.size else None,
+                    "hac_t": test.t_stat if math.isfinite(test.t_stat) else None,
+                }
+            per_stream[kind] = per_kind
+        stratification["streams"][name] = per_stream
+    return stratification
+
+
+def _without_default_config_extensions(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop post-freeze schema extensions still at their default values.
+
+    A campaign frozen before an extension existed must stay openable under the
+    extended schema; any non-default extension value is genuine config drift
+    and keeps the section in the hashed payload.
+    """
+
+    trimmed = {
+        key: dict(value) if isinstance(value, dict) else value
+        for key, value in payload.items()
+    }
+    if trimmed.get("holdout_gate") == HoldoutGateConfig().model_dump(mode="json"):
+        trimmed.pop("holdout_gate", None)
+    stats = trimmed.get("stats")
+    if isinstance(stats, dict):
+        if stats.get("survivor_causality_checks") is True:
+            stats.pop("survivor_causality_checks", None)
+        if stats.get("family_alpha") == 0.05:
+            stats.pop("family_alpha", None)
+    costs = trimmed.get("costs")
+    if isinstance(costs, dict) and costs.get("spread_source") == "ASSUMED_V1":
+        costs.pop("spread_source", None)
+    data = trimmed.get("data")
+    if isinstance(data, dict) and data.get("universe_pit") is False:
+        data.pop("universe_pit", None)
+    grid = trimmed.get("grid")
+    if isinstance(grid, dict) and grid.get("extended_families") is False:
+        grid.pop("extended_families", None)
+    return trimmed
+
+
 def _read_streams(path: Path) -> pd.DataFrame:
     frame = pd.read_parquet(path)
     frame["session"] = pd.to_datetime(frame["session"])
@@ -2104,7 +2241,7 @@ def _overlay_incremental_stream(
         .reindex(composite.index)
         .fillna(0.0)
     )
-    liquidity = adv_dollars.reindex(composite.index).fillna(100_000_000.0)
+    liquidity = adv_dollars.reindex(composite.index).fillna(DEFAULT_ADV_FALLBACK_DOLLARS)
     positions = cast(
         np.ndarray[Any, np.dtype[np.float64]],
         selected_active.to_numpy(dtype=np.float64),

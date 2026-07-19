@@ -209,6 +209,31 @@ class Catalog:
             evidence=json.loads(row["evidence_json"]),
         )
 
+    def smoke_override_gates(
+        self, campaign_id: str | None = None
+    ) -> tuple[GateResult, ...]:
+        """List gates that passed only through the smoke-profile override.
+
+        A gate row qualifies when its persisted evidence records
+        ``smoke_mechanical_override`` as true: the empirical check failed and
+        only the synthetic non-promotable profile let the phase proceed.
+        """
+
+        query = "SELECT campaign_id, phase FROM gates"
+        parameters: tuple[str, ...] = ()
+        if campaign_id is not None:
+            query += " WHERE campaign_id=?"
+            parameters = (campaign_id,)
+        query += " ORDER BY campaign_id, phase"
+        with self.connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        overridden = []
+        for row in rows:
+            result = self.gate(row["campaign_id"], row["phase"])
+            if result is not None and result.evidence.get("smoke_mechanical_override"):
+                overridden.append(result)
+        return tuple(overridden)
+
     def require_passed(self, campaign_id: str, phases: Iterable[str]) -> None:
         """Raise unless every prerequisite phase is promoted."""
 

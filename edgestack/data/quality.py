@@ -618,6 +618,182 @@ def reconcile_action_stratified_returns(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ActionsCrossCheck:
+    """Second-source corroboration verdict for Yahoo's action ledger."""
+
+    symbol: str
+    classification: str  # ACTIONS_CROSS_CHECKED | ACTIONS_DISAGREEMENT | ACTIONS_UNCHECKABLE
+    convention: str | None
+    checked_events: int
+    informative_events: int
+    disagreement_sessions: tuple[str, ...]
+    provenance_warning: str
+    convention_consistency: float | None = None
+
+
+_ACTION_CONVENTION_PRIORITY = ("RAW", "SPLIT_ADJUSTED", "TOTAL_RETURN_ADJUSTED")
+
+
+def cross_check_actions_implied_ratios(
+    frame_a: pd.DataFrame,
+    frame_b: pd.DataFrame,
+    *,
+    symbol: str,
+    tolerance: float = 0.005,
+    comparison_start: date | None = None,
+    required_fraction: float = 0.95,
+) -> ActionsCrossCheck:
+    """Corroborate Yahoo action sessions against the second provider's closes.
+
+    On each Yahoo-declared action session the second provider's close-to-close
+    gross return is compared against what it SHOULD be under each candidate
+    price convention: raw (carries the full split/dividend drop), split-adjusted
+    (drop undone), or total-return adjusted (Yahoo's adjusted ratio). An event
+    is informative only when those predictions actually differ beyond the
+    tolerance — small dividends are indistinguishable and never upgrade or
+    quarantine anything.
+
+    An event CONTRADICTS Yahoo only when the second provider's ratio matches
+    NO convention; matching the raw convention on a dividend session is
+    silence (the provider did not adjust), not contradiction. Stooq's bulk
+    series is empirically mixed: total-return adjusted from roughly 2009-2010
+    onward and raw/split-only before, so convention consistency is voted, not
+    intersected.
+
+    ``ACTIONS_DISAGREEMENT`` (quarantine): the fraction of contradicting
+    events exceeds ``1 - required_fraction``. ``ACTIONS_CROSS_CHECKED``: one
+    convention explains at least ``required_fraction`` of informative events.
+    ``ACTIONS_MIXED_CONVENTION``: prices corroborate everywhere but no single
+    convention dominates (partial dividend corroboration; the single-source
+    watermark stands). ``ACTIONS_UNCHECKABLE``: no informative events.
+    """
+
+    if tolerance <= 0:
+        raise ValueError("tolerance must be positive")
+    left = frame_a.loc[:, ["session", "close"]].copy()
+    left.columns = ["session", "price_a"]
+    right = frame_b.loc[
+        :, ["session", "close", "adjusted_close", "dividend", "split_factor"]
+    ].copy()
+    right.columns = ["session", "price_b", "adjusted_b", "dividend_b", "split_b"]
+    for frame in (left, right):
+        frame["session"] = pd.to_datetime(frame["session"]).dt.normalize()
+        if frame["session"].duplicated().any():
+            raise ValueError("provider frame contains duplicate sessions")
+        frame.sort_values("session", kind="stable", inplace=True)
+    left["price_a"] = pd.to_numeric(left["price_a"], errors="coerce")
+    for column in ("price_b", "adjusted_b", "dividend_b", "split_b"):
+        right[column] = pd.to_numeric(right[column], errors="coerce")
+    left["gross_a"] = left["price_a"].div(left["price_a"].shift(1))
+    right["gross_raw_b"] = right["price_b"].div(right["price_b"].shift(1))
+    right["gross_adjusted_b"] = right["adjusted_b"].div(right["adjusted_b"].shift(1))
+    common = left.merge(right, on="session", validate="one_to_one")
+    if comparison_start is not None:
+        common = common.loc[common["session"] >= pd.Timestamp(comparison_start)]
+    action = common["dividend_b"].fillna(0.0).ne(0.0) | common["split_b"].fillna(
+        1.0
+    ).ne(1.0)
+    events = common.loc[action]
+    if not 0.0 < required_fraction <= 1.0:
+        raise ValueError("required_fraction must lie in (0, 1]")
+    checked = 0
+    informative = 0
+    votes: dict[str, int] = dict.fromkeys(_ACTION_CONVENTION_PRIORITY, 0)
+    informative_matches: list[tuple[str, set[str]]] = []
+    for row in events.itertuples(index=False):
+        observed = float(row.gross_a)
+        split = float(row.split_b) if math.isfinite(float(row.split_b)) else 1.0
+        predictions = {
+            "RAW": float(row.gross_raw_b),
+            "SPLIT_ADJUSTED": float(row.gross_raw_b) * split,
+            "TOTAL_RETURN_ADJUSTED": float(row.gross_adjusted_b),
+        }
+        if not math.isfinite(observed) or observed <= 0.0:
+            continue
+        if any(
+            not math.isfinite(value) or value <= 0.0
+            for value in predictions.values()
+        ):
+            continue
+        checked += 1
+        matches = {
+            name
+            for name, value in predictions.items()
+            if abs(observed - value) / abs(value) <= tolerance
+        }
+        values = list(predictions.values())
+        spread = (max(values) - min(values)) / min(values)
+        session_label = pd.Timestamp(row.session).date().isoformat()
+        if matches and spread <= tolerance:
+            # All conventions predict the same value; nothing to learn.
+            continue
+        informative += 1
+        informative_matches.append((session_label, matches))
+        for name in matches:
+            votes[name] += 1
+    if informative == 0:
+        return ActionsCrossCheck(
+            symbol,
+            "ACTIONS_UNCHECKABLE",
+            None,
+            checked,
+            informative,
+            (),
+            (
+                "SINGLE_SOURCE_ACTIONS: no action session was large enough to "
+                "distinguish price conventions; Yahoo remains the only action "
+                "evidence."
+            ),
+            None,
+        )
+    dominant = max(
+        _ACTION_CONVENTION_PRIORITY,
+        key=lambda name: (votes[name], -_ACTION_CONVENTION_PRIORITY.index(name)),
+    )
+    contradictions = tuple(
+        session for session, matches in informative_matches if not matches
+    )
+    consistency = votes[dominant] / informative
+    if len(contradictions) / informative > 1.0 - required_fraction:
+        classification = "ACTIONS_DISAGREEMENT"
+        convention: str | None = None
+        warning = (
+            "ACTIONS_DISAGREEMENT: the second provider's closes match NO "
+            "price convention on "
+            f"{len(contradictions)} of {informative} informative action "
+            "session(s); quarantine this symbol."
+        )
+    elif consistency >= required_fraction:
+        classification = "ACTIONS_CROSS_CHECKED"
+        convention = dominant
+        warning = (
+            "ACTIONS_CROSS_CHECKED: the second provider's closes are "
+            f"consistent with Yahoo's action ledger under the {dominant} "
+            f"convention on {votes[dominant]} of {informative} informative "
+            "event(s)."
+        )
+    else:
+        classification = "ACTIONS_MIXED_CONVENTION"
+        convention = None
+        warning = (
+            "SINGLE_SOURCE_ACTIONS: the second provider corroborates prices "
+            "but switches adjustment conventions across the sample (best "
+            f"{dominant} covers {votes[dominant]} of {informative}); "
+            "dividend evidence remains partially single-source."
+        )
+    return ActionsCrossCheck(
+        symbol,
+        classification,
+        convention,
+        checked,
+        informative,
+        contradictions,
+        warning,
+        float(consistency),
+    )
+
+
 def audit_survivorship(
     intended_symbols: Sequence[str],
     available_symbols: Sequence[str],
@@ -747,6 +923,7 @@ __all__ = [
     "CorrectionRecord",
     "InstrumentQuality",
     "QAReport",
+    "ActionsCrossCheck",
     "QualityIssue",
     "ReconciliationResult",
     "Severity",
@@ -755,6 +932,7 @@ __all__ = [
     "audit_survivorship",
     "causal_outlier_mask",
     "causal_winsorize_prices",
+    "cross_check_actions_implied_ratios",
     "reconcile_adjusted_series",
     "run_quality_audit",
     "split_dividend_issues",

@@ -1,0 +1,208 @@
+package com.edgestack.mobile.ui
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import com.edgestack.mobile.BuildConfig
+import com.edgestack.mobile.data.AppSettings
+import com.edgestack.mobile.data.ConnectionProbe
+import com.edgestack.mobile.data.EdgeStackRepository
+import com.edgestack.mobile.data.MobileSnapshot
+import com.edgestack.mobile.data.SettingsStore
+import com.edgestack.mobile.data.SnapshotOrigin
+import com.edgestack.mobile.data.SnapshotResult
+import com.edgestack.mobile.data.TokenVault
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+data class MainUiState(
+    val loading: Boolean = true,
+    val snapshot: MobileSnapshot? = null,
+    val origin: SnapshotOrigin = SnapshotOrigin.DEMO,
+    val warning: String? = null,
+    val fatalError: String? = null,
+    val settings: AppSettings? = null,
+    val token: String = "",
+    val probing: Boolean = false,
+    val probe: ConnectionProbe? = null,
+    // Unsaved Setup edits; they survive tab switches so a toggle or URL edit
+    // is never silently reverted before "Save and refresh".
+    val draftApiUrl: String? = null,
+    val draftDemo: Boolean? = null,
+    val draftRememberToken: Boolean? = null,
+)
+
+class MainViewModel(
+    private val repository: EdgeStackRepository,
+    private val settingsStore: SettingsStore,
+) : ViewModel() {
+    private val mutableState = MutableStateFlow(MainUiState())
+    val state: StateFlow<MainUiState> = mutableState.asStateFlow()
+    private var refreshJob: Job? = null
+    private var loadedInitialSettings = false
+    private var lastLoadCompletedAtMs = 0L
+
+    init {
+        viewModelScope.launch {
+            settingsStore.settings.collect { settings ->
+                mutableState.update { it.copy(settings = settings) }
+                if (!loadedInitialSettings) {
+                    loadedInitialSettings = true
+                    // Auto-connect: restore the Keystore-sealed token (opt-in)
+                    // so a saved sealed connection resumes without retyping.
+                    if (settings.rememberToken && mutableState.value.token.isEmpty()) {
+                        settingsStore.readSealedToken()
+                            ?.let(TokenVault::open)
+                            ?.let { restored ->
+                                mutableState.update { it.copy(token = restored) }
+                            }
+                    }
+                    // Owner-build convenience: fall back to the compile-time
+                    // default token (debug builds only) so a personal build
+                    // connects with zero typing.
+                    if (mutableState.value.token.isEmpty() &&
+                        BuildConfig.DEFAULT_BEARER_TOKEN.isNotEmpty()
+                    ) {
+                        mutableState.update {
+                            it.copy(token = BuildConfig.DEFAULT_BEARER_TOKEN)
+                        }
+                    }
+                    refresh()
+                }
+            }
+        }
+    }
+
+    /**
+     * Reconnect whenever the app returns to the foreground, throttled so
+     * quick app switches do not hammer the server. Called from the UI's
+     * lifecycle observer; the initial launch refresh is handled in init.
+     */
+    fun onAppForeground() {
+        if (!loadedInitialSettings) return
+        val elapsed = System.currentTimeMillis() - lastLoadCompletedAtMs
+        if (elapsed >= FOREGROUND_REFRESH_THROTTLE_MS) refresh()
+    }
+
+    fun setToken(value: String) {
+        mutableState.update { it.copy(token = value) }
+    }
+
+    fun setDraftApiUrl(value: String) {
+        mutableState.update { it.copy(draftApiUrl = value) }
+    }
+
+    fun setDraftDemo(value: Boolean) {
+        mutableState.update { it.copy(draftDemo = value) }
+    }
+
+    fun setDraftRememberToken(value: Boolean) {
+        mutableState.update { it.copy(draftRememberToken = value) }
+    }
+
+    fun testConnection(apiUrl: String, token: String) {
+        setToken(token)
+        viewModelScope.launch {
+            mutableState.update { it.copy(probing = true, probe = null) }
+            val result = runCatching { repository.probe(apiUrl, token) }
+                .getOrElse { error ->
+                    ConnectionProbe(
+                        ok = false,
+                        serverReachable = false,
+                        mode = null,
+                        tokenAccepted = null,
+                        message = error.message ?: "Connection test failed",
+                    )
+                }
+            mutableState.update { it.copy(probing = false, probe = result) }
+        }
+    }
+
+    fun saveSettings(
+        apiUrl: String,
+        demoMode: Boolean,
+        token: String,
+        rememberToken: Boolean = false,
+    ) {
+        setToken(token)
+        viewModelScope.launch {
+            val sealed = if (rememberToken && token.isNotEmpty()) {
+                TokenVault.seal(token)
+            } else {
+                null
+            }
+            // Sealing can fail on devices without a usable Keystore; the
+            // preference is then persisted as OFF rather than pretending.
+            val effectiveRemember = rememberToken && sealed != null
+            runCatching {
+                settingsStore.save(apiUrl, demoMode, effectiveRemember, sealed)
+            }
+                .onSuccess {
+                    mutableState.update {
+                        it.copy(
+                            draftApiUrl = null,
+                            draftDemo = null,
+                            draftRememberToken = null,
+                        )
+                    }
+                    refresh(
+                        AppSettings(
+                            apiUrl.trim().removeSuffix("/"),
+                            demoMode,
+                            effectiveRemember,
+                        )
+                    )
+                }
+                .onFailure { error ->
+                    mutableState.update { it.copy(fatalError = error.message) }
+                }
+        }
+    }
+
+    fun refresh(settingsOverride: AppSettings? = null) {
+        val settings = settingsOverride ?: mutableState.value.settings ?: return
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
+            mutableState.update { it.copy(loading = true, fatalError = null) }
+            runCatching { repository.load(settings, mutableState.value.token) }
+                .onSuccess(::show)
+                .onFailure { error ->
+                    mutableState.update {
+                        it.copy(loading = false, fatalError = error.message ?: "Unknown error")
+                    }
+                }
+        }
+    }
+
+    private fun show(result: SnapshotResult) {
+        lastLoadCompletedAtMs = System.currentTimeMillis()
+        mutableState.update {
+            it.copy(
+                loading = false,
+                snapshot = result.snapshot,
+                origin = result.origin,
+                warning = result.warning,
+                fatalError = null,
+            )
+        }
+    }
+
+    companion object {
+        private const val FOREGROUND_REFRESH_THROTTLE_MS = 60_000L
+    }
+
+    class Factory(
+        private val repository: EdgeStackRepository,
+        private val settingsStore: SettingsStore,
+    ) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            require(modelClass.isAssignableFrom(MainViewModel::class.java))
+            return MainViewModel(repository, settingsStore) as T
+        }
+    }
+}

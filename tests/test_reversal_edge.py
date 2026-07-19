@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import exchange_calendars
 import numpy as np
 import pandas as pd
 import pandas_market_calendars as mcal
 import pytest
+import yaml
 
 from edgestack.backtest.engine import overlapping_cohort_targets
 from edgestack.edges.global_holdout import GlobalHoldoutRecord
@@ -13,6 +17,8 @@ from edgestack.edges.reversal_edge import (
     _execute_with_fill_availability,
     _filter_frozen_universe,
     _normalize_known_zipline_calendar_exception,
+    _require_consistent_trial_count,
+    run_cpcv_diagnostic,
 )
 
 
@@ -33,6 +39,25 @@ def test_repeated_daily_cohort_contributes_two_percent_per_name() -> None:
     assert mature.iloc[4] == 0.10
     assert mature.iloc[0] == 0.02
     assert mature.sum() == 0.5
+
+
+def test_diverging_global_trial_count_declarations_are_rejected() -> None:
+    with pytest.raises(ValueError, match="conservative_global_trial_count"):
+        _require_consistent_trial_count(
+            {
+                "selection_rationale": {"conservative_global_trial_count": 19197},
+                "preholdout_validation": {"conservative_global_trial_count": 30},
+            }
+        )
+
+
+def test_agreeing_global_trial_count_declarations_are_accepted() -> None:
+    _require_consistent_trial_count(
+        {
+            "selection_rationale": {"conservative_global_trial_count": 19197},
+            "preholdout_validation": {"conservative_global_trial_count": 19197},
+        }
+    )
 
 
 def test_zero_volume_closing_fill_carries_prior_position() -> None:
@@ -179,6 +204,74 @@ def test_frozen_universe_drops_extra_equities_and_etfs() -> None:
     )
     result = _filter_frozen_universe(bars, {"KEEP": "equity", "SPY": "etf"})
     assert result["symbol"].tolist() == ["KEEP", "SPY"]
+
+
+def _cpcv_diagnostic_fixture(tmp_path: Path) -> Path:
+    sessions = pd.bdate_range("2015-01-02", periods=400)
+    rng = np.random.default_rng(20260715)
+    frame = pd.DataFrame(
+        {
+            "session": sessions,
+            "rule_a": rng.normal(0.0004, 0.01, 400),
+            "rule_b": rng.normal(0.0001, 0.01, 400),
+            "rule_c": rng.normal(-0.0002, 0.01, 400),
+        }
+    )
+    parquet = tmp_path / "parent_net_returns.parquet"
+    frame.to_parquet(parquet, index=False)
+    config = {
+        "campaign_id": "cpcv-diagnostic-test",
+        "data": {
+            "parent_net_returns_path": "parent_net_returns.parquet",
+            "research_start": "2015-01-02",
+            # Sessions 300+ fall in the sealed window and must be excluded.
+            "preholdout_end_exclusive": str(sessions[300].date()),
+            "holdout_start": str(sessions[300].date()),
+            "holdout_end": str(sessions[-1].date()),
+        },
+        "strategy": {"candidate_hypothesis_id": "rule_a"},
+        "preholdout_validation": {
+            "cpcv_groups": 6,
+            "cpcv_test_groups": 2,
+            "purge_sessions": 5,
+            "embargo_sessions": 5,
+        },
+    }
+    config_path = tmp_path / "edge.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return config_path
+
+
+def test_cpcv_diagnostic_is_sealed_window_safe_and_deterministic(
+    tmp_path: Path,
+) -> None:
+    config_path = _cpcv_diagnostic_fixture(tmp_path)
+    first = run_cpcv_diagnostic(config_path.name, root=tmp_path)
+    payload = json.loads(first.read_text(encoding="utf-8"))
+    assert payload["policy"] == "POST_HOLDOUT_DIAGNOSTIC_REPORT_ONLY"
+    assert payload["window"]["sessions"] == 300
+    assert (
+        payload["window"]["last_session"] < payload["window"]["holdout_start_excluded"]
+    )
+    assert payload["strategy_count"] == 3
+    assert payload["pbo_defined"] is True
+    assert 0.0 <= payload["pbo"] <= 1.0
+    assert len(payload["selected_oos_rank_percentiles"]) == payload["cpcv"]["n_splits"]
+    second = json.loads(
+        run_cpcv_diagnostic(config_path.name, root=tmp_path).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert second["result_sha256"] == payload["result_sha256"]
+
+
+def test_cpcv_diagnostic_rejects_an_unknown_candidate(tmp_path: Path) -> None:
+    config_path = _cpcv_diagnostic_fixture(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["strategy"]["candidate_hypothesis_id"] = "rule_x"
+    config_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="absent from the parent streams"):
+        run_cpcv_diagnostic(config_path.name, root=tmp_path)
 
 
 def test_sealed_record_from_another_freeze_is_rejected() -> None:

@@ -88,6 +88,38 @@ def test_gate_prerequisites_and_single_holdout_access(tmp_path) -> None:
         pass
 
 
+def test_smoke_override_gates_lists_only_mechanically_passed_phases(tmp_path) -> None:
+    catalog = Catalog(tmp_path / "catalog.sqlite")
+    catalog.create_campaign("c1", {"id": "c1"})
+    now = datetime.now(UTC)
+    catalog.record_gate(
+        GateResult(
+            "c1",
+            "discovery",
+            GateStatus.PASS,
+            now,
+            "smoke override",
+            {"smoke_mechanical_override": True},
+        )
+    )
+    catalog.record_gate(
+        GateResult(
+            "c1",
+            "validation",
+            GateStatus.PASS,
+            now,
+            "empirical pass",
+            {"smoke_mechanical_override": False},
+        )
+    )
+    catalog.record_gate(
+        GateResult("c1", "data", GateStatus.PASS, now, "no marker", {})
+    )
+    overridden = catalog.smoke_override_gates("c1")
+    assert [gate.phase for gate in overridden] == ["discovery"]
+    assert [gate.phase for gate in catalog.smoke_override_gates()] == ["discovery"]
+
+
 def test_holdout_completion_is_idempotent_for_same_result_only(tmp_path) -> None:
     catalog = Catalog(tmp_path / "catalog.sqlite")
     catalog.create_campaign("c1", {"id": "c1"})

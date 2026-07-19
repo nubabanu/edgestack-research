@@ -1,0 +1,108 @@
+# PREREGISTRATION — committed before any evaluation of this family is run.
+# Any change to this file after the first evaluation is a NEW campaign; the
+# original declaration stays in git history as the binding record.
+#
+# Supersedes the BLOCKED declaration in configs/pead-study-v1.yaml: the
+# blocking condition (no free point-in-time earnings timestamps) was lifted
+# by the SEC EDGAR feed (edgestack/data/edgar_earnings.py) — 8-K Item 2.02
+# acceptance datetimes plus XBRL frame-tagged quarterly EPS, both free.
+campaign_id: pead-study-v2-20260719-001
+declared_on: '2026-07-19'
+revision_context: ORIGINAL_PREREGISTRATION_NO_EVALUATION_RUN
+
+motivation:
+  source_evidence: >
+    PEAD v1 was blocked only for data, not for method: the causal SUE
+    feature and monthly cross-sectional machinery already exist. EDGAR
+    acceptance timestamps remove the fabricated-date risk that forced the
+    block, and the seasonal-random-walk SUE needs no analyst consensus.
+  literature:
+    - Ball, Brown (1968); Bernard, Thomas (1989, 1990) — the original drift,
+      defined on seasonal-random-walk earnings surprises (no analyst data)
+    - Chordia, Goyal, Sadka, Sadka, Shivakumar (2009) — liquidity and PEAD
+    - Battalio, Mendenhall (2011); Chordia, Subrahmanyam, Tong (2014) —
+      post-2000 attenuation in large caps, the reason a FAIL is plausible
+  economic_rationale: >
+    Underreaction to earnings news: prices adjust to announced surprises
+    over weeks, not minutes, because attention and arbitrage capital are
+    limited. Large caps are the hardest place for this to survive, which is
+    exactly what the panel provides — an honest hard test.
+
+data_contract:
+  earnings_feed: >
+    SEC EDGAR via edgestack/data/edgar_earnings.py. Announcement moment is
+    the EDGAR acceptance datetime of the first 8-K containing Item 2.02
+    inside (quarter_end, quarter_end + 90 days]; the XBRL filing date is the
+    fallback availability moment. Quarterly EPS is the frame-tagged XBRL
+    companyconcept series (diluted, basic fallback).
+  causality_rule: >
+    A SUE becomes usable at the first session STRICTLY AFTER its
+    availability date; combined with month-end MOC portfolio formation and
+    next-session exposure, at least one full session always separates the
+    announcement from any position.
+  watermarks:
+    - SURVIVORSHIP_BIASED            # sealed current-membership panel
+    - PRESS_RELEASE_EQUALS_XBRL_APPROXIMATION
+    - XBRL_COVERAGE_EFFECTIVELY_2009_PLUS
+  bias_note: >
+    Coverage starting around 2009 means the family is evaluated only in the
+    post-attenuation era on surviving large caps — both biases push against
+    the hypothesis for the drift and in its favor for unconditional stock
+    drift; the placebo controls and 4x cost ladder remain the referees.
+
+declared_family:
+  # 3 real trials; every one is evaluated, reported, and counted. Placebo
+  # controls (SHUFFLED_DATE and MATCHED_RANDOM, two per real trial) extend
+  # the accounting family to 9.
+  universe: sealed full-campaign equity panel (current S&P 500 membership)
+  sue_definition: >
+    (EPS_q - EPS_{q-4}) / std(the trailing eight seasonal differences,
+    minimum six present, ddof=1); computed only from frame-tagged XBRL
+    quarters.
+  signals:
+    - sue_top_decile_63d     # freshest SUE within 63 sessions, top decile, min 30 names
+    - sue_top_quintile_63d   # freshest SUE within 63 sessions, top quintile, min 30 names
+    - sue_top_quintile_21d   # freshest SUE within 21 sessions, top quintile, min 20 names
+  portfolio: equal-weight entry at each month-end close with buy-and-hold
+    drift inside the month; a trial is flat any month its minimum name
+    count is not met
+  direction: LONG_ONLY_VS_CASH
+  short_side_excluded_reason: negative-surprise shorts concentrate in
+    hard-to-borrow names; borrow economics are not modeled by the declared
+    cost engine
+  rebalance: month-end close only (MOC); membership fixed intramonth
+  real_trial_count: 3
+  placebo_controls_per_trial: 2
+  accounting_family_size: 9
+
+execution_contract:
+  entry_exit: MOC on the final session of each month for names entering or
+    leaving the portfolio; decision frozen 15:45 America/New_York
+  costs: >
+    Full declared cost model per NAME CHANGED at each rebalance (half-spread
+    per fill, base slippage, square-root impact of the 1/N slice at $100k
+    capital, turnover penalty), plus the preregistered 0.5x/1x/2x/4x
+    sensitivity ladder. Cash earns zero.
+
+validation_protocol:
+  discovery_thresholds: LITERATURE_V2 (directed HAC t >= 3.8 on the
+    timing-minus-nothing net stream, BH q 0.05, DSR >= 0.95 at the accounting
+    family size 9, Romano-Wolf alpha 0.05, White/Hansen family p < 0.05)
+  risk_report: Sharpe, max drawdown, and terminal wealth versus buy-and-hold
+    are REPORTED for every trial; they are context, not gates
+  oos: expanding walk-forward (5y min train, 1y test) and CPCV (6 groups,
+    2 test, 21 purge/embargo) with PBO < 0.20
+  causality: per-survivor truncation invariance and extra-lag checks
+  confirmation: independent event-loop replication of every finalist
+
+holdout:
+  policy: FORWARD_ONLY
+  start: '2026-07-19'
+  end: '2028-07-19'
+  note: >
+    No historical window is reserved. Interim looks are forbidden; a single
+    evaluation consumes it.
+  evaluator: net mean AND stationary-bootstrap CI lower bound > 0 (CI_V2)
+
+status: DECLARED_AWAITING_IMPLEMENTATION
+live_capital: PAPER_ONLY

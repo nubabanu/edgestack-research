@@ -1,0 +1,83 @@
+# PREREGISTRATION — committed before any evaluation of this family is run.
+# Any change to this file after the first evaluation is a NEW campaign; the
+# original declaration stays in git history as the binding record.
+campaign_id: pairs-study-v1-20260719-001
+declared_on: '2026-07-19'
+revision_context: ORIGINAL_PREREGISTRATION_NO_EVALUATION_RUN
+
+motivation:
+  source_evidence: >
+    Restricting the pair universe to the nine sealed liquid ETFs keeps every
+    leg easy to borrow and cheap to trade, so a declared flat borrow fee
+    plus the standard flip cost model covers the true frictions without
+    guessing single-name borrow rates.
+  literature:
+    - Gatev, Goetzmann, Rouwenhorst (2006) — distance-method pairs trading
+    - Do, Faff (2010, 2012) — pairs profitability decline and cost sensitivity
+  economic_rationale: >
+    Highly correlated sector/index ETFs share factor exposure; temporary
+    divergences reflect liquidity demand rather than information and revert
+    over days to weeks.
+
+declared_family:
+  # 3 real trials; every one is evaluated, reported, and counted. Placebo
+  # controls (SHUFFLED_DATE and MATCHED_RANDOM, two per real trial) extend
+  # the accounting family to 9.
+  instruments: [SPY, QQQ, IWM, XLK, XLF, XLE, XLV, XLY, XLI]
+  method: >
+    Distance method on cumulative total-return paths rebased to 1.0 at each
+    formation start. Each 126-session trading period is immediately preceded
+    by its own 252-session formation window; trading periods are contiguous
+    and non-overlapping, cycles are anchored at the first session where all
+    nine instruments trade, and a formation window never overlaps its own
+    trading period. Pairs ranked by formation-period sum of squared
+    normalized-price differences (SSD); the declared top-K trade next cycle.
+  signals:
+    - pairs_top5_z20     # top 5 pairs, open at 2.0 formation sigma
+    - pairs_top5_z15     # top 5 pairs, open at 1.5 formation sigma
+    - pairs_top10_z20    # top 10 of 36 pairs, open at 2.0 formation sigma
+  trade_rule: >
+    Open when the normalized spread exceeds the threshold times its
+    formation-period standard deviation: long the lagging leg, short the
+    leading leg, 1/K capital per pair per leg. Close on the first spread
+    zero-crossing or the final session of the trading period, whichever
+    comes first. Decisions use closes through the PRIOR session; fills are
+    next-session MOC.
+  direction: LONG_SHORT_DOLLAR_NEUTRAL
+  short_borrow_fee_annual_bps: 100   # flat declared fee on open short legs
+  real_trial_count: 3
+  placebo_controls_per_trial: 2
+  accounting_family_size: 9
+
+execution_contract:
+  entry_exit: MOC fills on the session after the signal session; one flip
+    cost per leg per fill (four fills per round trip per pair)
+  costs: >
+    Full declared cost model per FILL (half-spread, base slippage,
+    square-root impact of the 1/K slice at $100k capital, turnover penalty)
+    plus 100 bps/year borrow accrued daily on open short-leg weight, plus
+    the preregistered 0.5x/1x/2x/4x sensitivity ladder.
+
+validation_protocol:
+  discovery_thresholds: LITERATURE_V2 (directed HAC t >= 3.8 on the
+    net long-short stream, BH q 0.05, DSR >= 0.95 at the accounting family
+    size 9, Romano-Wolf alpha 0.05, White/Hansen family p < 0.05)
+  risk_report: Sharpe, max drawdown, and terminal wealth versus buy-and-hold
+    SPY are REPORTED for every trial; they are context, not gates
+  oos: expanding walk-forward (5y min train, 1y test) and CPCV (6 groups,
+    2 test, 21 purge/embargo) with PBO < 0.20
+  causality: per-survivor truncation invariance and extra-lag checks
+  confirmation: independent event-loop replication of every finalist
+
+holdout:
+  policy: FORWARD_ONLY
+  start: '2026-07-19'
+  end: '2028-07-19'
+  note: >
+    No historical window is reserved; prior windows were analytically
+    observed by earlier campaigns. Interim looks are forbidden; a single
+    evaluation consumes it.
+  evaluator: net mean AND stationary-bootstrap CI lower bound > 0 (CI_V2)
+
+status: DECLARED_AWAITING_IMPLEMENTATION
+live_capital: PAPER_ONLY

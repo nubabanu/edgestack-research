@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -55,6 +55,24 @@ class OutboxRecord:
     event: AlertEvent
     channel: str
     attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class SignalDecision:
+    """Immutable candidate/skip decision written by one causal signal run."""
+
+    decision_id: str
+    security_id: str
+    ticker: str
+    action: str
+    direction: str | None
+    veto_reason: str | None
+    quote_freshness_seconds: float | None
+    intended_entry_at: datetime | None
+    intended_exit_at: datetime | None
+    leverage: float
+    horizon_sessions: int
+    payload: Mapping[str, object]
 
 
 class StateStore:
@@ -123,8 +141,347 @@ class StateStore:
                     net_pnl REAL,
                     FOREIGN KEY(recommendation_id) REFERENCES recommendations(recommendation_id)
                 );
+                CREATE TABLE IF NOT EXISTS signal_runs (
+                    run_id TEXT PRIMARY KEY,
+                    campaign_namespace TEXT NOT NULL CHECK(campaign_namespace='loss-aware-v2'),
+                    decision_time TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    causal_data_hash TEXT NOT NULL,
+                    config_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS signal_decisions (
+                    decision_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    security_id TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK(action IN ('CANDIDATE','SKIP')),
+                    direction TEXT,
+                    veto_reason TEXT,
+                    quote_freshness_seconds REAL,
+                    intended_entry_at TEXT,
+                    actual_fill_at TEXT,
+                    actual_fill_price REAL,
+                    intended_exit_at TEXT,
+                    leverage REAL NOT NULL,
+                    horizon_sessions INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES signal_runs(run_id)
+                );
+                CREATE TABLE IF NOT EXISTS paper_marks (
+                    decision_id TEXT NOT NULL,
+                    mark_at TEXT NOT NULL,
+                    available_at TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    causal_data_hash TEXT NOT NULL,
+                    mae REAL,
+                    mfe REAL,
+                    PRIMARY KEY(decision_id, mark_at),
+                    FOREIGN KEY(decision_id) REFERENCES signal_decisions(decision_id)
+                );
+                CREATE TABLE IF NOT EXISTS paper_outcomes (
+                    decision_id TEXT PRIMARY KEY,
+                    exit_at TEXT NOT NULL,
+                    exit_price REAL NOT NULL,
+                    gross_pnl REAL NOT NULL,
+                    costs REAL NOT NULL,
+                    net_pnl REAL NOT NULL,
+                    stop_gap REAL,
+                    stop_slippage REAL,
+                    transition_reason TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    FOREIGN KEY(decision_id) REFERENCES signal_decisions(decision_id)
+                );
+                CREATE TABLE IF NOT EXISTS signal_outbox (
+                    idempotency_key TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    decision_id TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    FOREIGN KEY(run_id) REFERENCES signal_runs(run_id),
+                    FOREIGN KEY(decision_id) REFERENCES signal_decisions(decision_id)
+                );
+                PRAGMA user_version=2;
                 """
             )
+
+    def create_signal_run(
+        self,
+        *,
+        run_id: str,
+        decision_time: datetime,
+        created_at: datetime,
+        causal_data_hash: str,
+        config_hash: str,
+        decisions: Iterable[SignalDecision],
+        channels: Iterable[str] = ("console",),
+        payload: Mapping[str, object] | None = None,
+    ) -> bool:
+        """Atomically create a V2 run, every candidate/skip, and alert events."""
+
+        _aware(decision_time)
+        _aware(created_at)
+        if created_at < decision_time:
+            raise ValueError("created_at cannot precede decision_time")
+        if not run_id or len(causal_data_hash) != 64 or len(config_hash) != 64:
+            raise ValueError("run identity and SHA-256 hashes are required")
+        rows = tuple(decisions)
+        if not rows:
+            raise ValueError("a signal run must record candidates or skips")
+        channel_names = _channels(channels)
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """INSERT OR IGNORE INTO signal_runs VALUES
+                (?, 'loss-aware-v2', ?, ?, ?, ?, 'RECORDED', ?)""",
+                (
+                    run_id,
+                    decision_time.isoformat(),
+                    created_at.isoformat(),
+                    causal_data_hash,
+                    config_hash,
+                    json.dumps(dict(payload or {}), sort_keys=True, default=str),
+                ),
+            )
+            if cursor.rowcount == 0:
+                return False
+            for item in rows:
+                if item.action not in {"CANDIDATE", "SKIP"}:
+                    raise ValueError("decision action must be CANDIDATE or SKIP")
+                if item.leverage not in {
+                    1.0,
+                    1.5,
+                    2.0,
+                } or item.horizon_sessions not in {
+                    21,
+                    252,
+                }:
+                    raise ValueError("undeclared leverage or horizon")
+                for stamp in (item.intended_entry_at, item.intended_exit_at):
+                    if stamp is not None:
+                        _aware(stamp)
+                connection.execute(
+                    """INSERT INTO signal_decisions(
+                    decision_id, run_id, security_id, ticker, action, direction,
+                    veto_reason, quote_freshness_seconds, intended_entry_at,
+                    intended_exit_at, leverage, horizon_sessions, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        item.decision_id,
+                        run_id,
+                        item.security_id,
+                        item.ticker,
+                        item.action,
+                        item.direction,
+                        item.veto_reason,
+                        item.quote_freshness_seconds,
+                        (
+                            item.intended_entry_at.isoformat()
+                            if item.intended_entry_at
+                            else None
+                        ),
+                        (
+                            item.intended_exit_at.isoformat()
+                            if item.intended_exit_at
+                            else None
+                        ),
+                        item.leverage,
+                        item.horizon_sessions,
+                        json.dumps(dict(item.payload), sort_keys=True, default=str),
+                    ),
+                )
+                for channel in channel_names:
+                    key = f"{run_id}:{item.decision_id}:{channel}"
+                    connection.execute(
+                        "INSERT INTO signal_outbox VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+                        (
+                            key,
+                            run_id,
+                            item.decision_id,
+                            channel,
+                            json.dumps(
+                                {"action": item.action, "ticker": item.ticker},
+                                sort_keys=True,
+                            ),
+                            created_at.isoformat(),
+                        ),
+                    )
+        return True
+
+    def record_paper_fill(
+        self, decision_id: str, fill_at: datetime, price: float
+    ) -> None:
+        """Record the first paper fill exactly once and after its decision."""
+
+        _aware(fill_at)
+        if price <= 0:
+            raise ValueError("fill price must be positive")
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT d.actual_fill_at, r.decision_time
+                FROM signal_decisions d JOIN signal_runs r USING(run_id)
+                WHERE d.decision_id=?""",
+                (decision_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(decision_id)
+            if row["actual_fill_at"] is not None:
+                raise ValueError("paper fill is immutable")
+            if fill_at <= datetime.fromisoformat(row["decision_time"]):
+                raise ValueError("paper fill must be after the decision")
+            connection.execute(
+                "UPDATE signal_decisions SET actual_fill_at=?, actual_fill_price=? WHERE decision_id=?",
+                (fill_at.isoformat(), price, decision_id),
+            )
+
+    def record_paper_mark(
+        self,
+        decision_id: str,
+        *,
+        mark_at: datetime,
+        available_at: datetime,
+        price: float,
+        causal_data_hash: str,
+    ) -> tuple[float, float]:
+        """Append a causal mark; retroactive or revised history is rejected."""
+
+        _aware(mark_at)
+        _aware(available_at)
+        if available_at < mark_at or price <= 0 or len(causal_data_hash) != 64:
+            raise ValueError("invalid paper mark or provenance")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT actual_fill_at, actual_fill_price, direction
+                FROM signal_decisions WHERE decision_id=?""",
+                (decision_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(decision_id)
+            if row["actual_fill_at"] is None:
+                raise ValueError("cannot mark an unfilled decision")
+            fill_at = datetime.fromisoformat(row["actual_fill_at"])
+            if mark_at < fill_at:
+                raise ValueError("mark cannot precede fill")
+            latest = connection.execute(
+                "SELECT mark_at, available_at FROM paper_marks WHERE decision_id=? ORDER BY mark_at DESC LIMIT 1",
+                (decision_id,),
+            ).fetchone()
+            if latest is not None and (
+                mark_at <= datetime.fromisoformat(latest["mark_at"])
+                or available_at <= datetime.fromisoformat(latest["available_at"])
+            ):
+                raise ValueError("retroactive paper marks are prohibited")
+            multiplier = -1.0 if row["direction"] == Direction.SHORT.value else 1.0
+            current = multiplier * (price / float(row["actual_fill_price"]) - 1)
+            prior = connection.execute(
+                "SELECT MIN(mae) AS mae, MAX(mfe) AS mfe FROM paper_marks WHERE decision_id=?",
+                (decision_id,),
+            ).fetchone()
+            mae = (
+                min(current, float(prior["mae"]))
+                if prior["mae"] is not None
+                else current
+            )
+            mfe = (
+                max(current, float(prior["mfe"]))
+                if prior["mfe"] is not None
+                else current
+            )
+            connection.execute(
+                "INSERT INTO paper_marks VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    decision_id,
+                    mark_at.isoformat(),
+                    available_at.isoformat(),
+                    price,
+                    causal_data_hash,
+                    mae,
+                    mfe,
+                ),
+            )
+        return float(mae), float(mfe)
+
+    def record_paper_outcome(
+        self,
+        decision_id: str,
+        *,
+        exit_at: datetime,
+        exit_price: float,
+        gross_pnl: float,
+        costs: float,
+        stop_gap: float | None,
+        stop_slippage: float | None,
+        transition_reason: str,
+        recorded_at: datetime,
+    ) -> None:
+        """Write an immutable completed outcome; later rewrites fail."""
+
+        _aware(exit_at)
+        _aware(recorded_at)
+        if (
+            exit_price <= 0
+            or costs < 0
+            or recorded_at < exit_at
+            or not transition_reason
+        ):
+            raise ValueError("invalid paper outcome")
+        with self.connect() as connection:
+            timing = connection.execute(
+                """SELECT d.actual_fill_at, MAX(m.mark_at) AS latest_mark
+                FROM signal_decisions d
+                LEFT JOIN paper_marks m USING(decision_id)
+                WHERE d.decision_id=? GROUP BY d.decision_id""",
+                (decision_id,),
+            ).fetchone()
+            if timing is None or timing["actual_fill_at"] is None:
+                raise ValueError("paper outcome requires a filled decision")
+            last_observation = datetime.fromisoformat(
+                timing["latest_mark"] or timing["actual_fill_at"]
+            )
+            if exit_at < last_observation:
+                raise ValueError("retroactive paper outcomes are prohibited")
+            connection.execute(
+                """INSERT INTO paper_outcomes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    decision_id,
+                    exit_at.isoformat(),
+                    exit_price,
+                    gross_pnl,
+                    costs,
+                    gross_pnl - costs,
+                    stop_gap,
+                    stop_slippage,
+                    transition_reason,
+                    recorded_at.isoformat(),
+                ),
+            )
+
+    def paper_scorecard(self) -> dict[str, float | int]:
+        """Replay stored V2 evidence without fetching, backfilling, or recomputing signals."""
+
+        with self.connect() as connection:
+            decisions = connection.execute(
+                "SELECT COUNT(*) AS n, SUM(action='CANDIDATE') AS candidates, SUM(action='SKIP') AS skips FROM signal_decisions"
+            ).fetchone()
+            outcomes = connection.execute(
+                "SELECT COUNT(*) AS n, AVG(net_pnl) AS mean, SUM(net_pnl < 0) AS losses, SUM(net_pnl) AS total FROM paper_outcomes"
+            ).fetchone()
+        completed = int(outcomes["n"] or 0)
+        return {
+            "decisions": int(decisions["n"] or 0),
+            "candidates": int(decisions["candidates"] or 0),
+            "skips": int(decisions["skips"] or 0),
+            "completed": completed,
+            "loss_probability": (
+                float(outcomes["losses"] or 0) / completed if completed else 0.0
+            ),
+            "mean_net_pnl": float(outcomes["mean"] or 0.0),
+            "total_net_pnl": float(outcomes["total"] or 0.0),
+        }
 
     def add(self, recommendation: Recommendation, channels: Iterable[str]) -> bool:
         """Insert a new recommendation and initial logical event exactly once."""

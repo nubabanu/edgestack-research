@@ -4,6 +4,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from edgestack.data.calendars import (
     NYSECalendar,
@@ -16,9 +17,147 @@ from edgestack.data.quality import (
     audit_instrument,
     causal_outlier_mask,
     causal_winsorize_prices,
+    cross_check_actions_implied_ratios,
     reconcile_action_stratified_returns,
     reconcile_adjusted_series,
 )
+
+
+def _actions_fixture(
+    stooq_closes: list[float],
+    *,
+    dividend: float = 0.0,
+    split_factor: float = 1.0,
+    yahoo_closes: list[float] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    sessions = pd.to_datetime(["2024-01-02", "2024-01-03"])
+    yahoo_raw = yahoo_closes or [100.0, 50.0]
+    frame_a = pd.DataFrame({"session": sessions, "close": stooq_closes})
+    frame_b = pd.DataFrame(
+        {
+            "session": sessions,
+            "close": yahoo_raw,
+            # Adjusted series carries no economic move on the action day.
+            "adjusted_close": [100.0, 100.0],
+            "dividend": [0.0, dividend],
+            "split_factor": [1.0, split_factor],
+        }
+    )
+    return frame_a, frame_b
+
+
+def test_actions_cross_check_confirms_a_raw_second_provider() -> None:
+    frame_a, frame_b = _actions_fixture([100.0, 50.0], split_factor=2.0)
+    result = cross_check_actions_implied_ratios(frame_a, frame_b, symbol="AAA")
+    assert result.classification == "ACTIONS_CROSS_CHECKED"
+    assert result.convention == "RAW"
+    assert result.informative_events == 1
+
+
+def test_actions_cross_check_confirms_a_split_adjusted_second_provider() -> None:
+    frame_a, frame_b = _actions_fixture([100.0, 100.0], split_factor=2.0)
+    result = cross_check_actions_implied_ratios(frame_a, frame_b, symbol="AAA")
+    assert result.classification == "ACTIONS_CROSS_CHECKED"
+    # Flat closes match both non-raw hypotheses; the deterministic priority
+    # order reports the weaker split-adjusted claim.
+    assert result.convention == "SPLIT_ADJUSTED"
+
+
+def test_actions_cross_check_quarantines_a_contradicted_split() -> None:
+    frame_a, frame_b = _actions_fixture([100.0, 80.0], split_factor=2.0)
+    result = cross_check_actions_implied_ratios(frame_a, frame_b, symbol="AAA")
+    assert result.classification == "ACTIONS_DISAGREEMENT"
+    assert result.disagreement_sessions == ("2024-01-03",)
+    assert "quarantine" in result.provenance_warning
+
+
+def test_one_oddball_event_does_not_poison_decades_of_agreement() -> None:
+    # 21 dividend events: 20 match the total-return convention exactly and
+    # one (an ex-date misalignment) matches only the raw convention. The
+    # dominant convention carries 20/21 > 95%, so the symbol stays
+    # cross-checked and only the odd session is listed.
+    sessions = pd.bdate_range("2020-01-06", periods=43)
+    dividend = 2.0
+    raw = [100.0]
+    adjusted = [100.0]
+    dividends = []
+    for step in range(1, 43):
+        is_event = step % 2 == 0
+        dividends.append(dividend if is_event else 0.0)
+        raw.append(raw[-1] * (0.98 if is_event else 1.001))
+        adjusted.append(
+            adjusted[-1] * ((0.98 + dividend / raw[-2]) if is_event else 1.001)
+        )
+    dividends = [0.0, *dividends]
+    stooq = list(adjusted)
+    odd_event = 40  # one event mirrors the RAW drop instead of the adjustment
+    stooq[odd_event] = stooq[odd_event - 1] * (raw[odd_event] / raw[odd_event - 1])
+    for step in range(odd_event + 1, 43):
+        stooq[step] = stooq[step - 1] * (adjusted[step] / adjusted[step - 1])
+    frame_a = pd.DataFrame({"session": sessions, "close": stooq})
+    frame_b = pd.DataFrame(
+        {
+            "session": sessions,
+            "close": raw,
+            "adjusted_close": adjusted,
+            "dividend": dividends,
+            "split_factor": 1.0,
+        }
+    )
+    result = cross_check_actions_implied_ratios(frame_a, frame_b, symbol="AAA")
+    assert result.classification == "ACTIONS_CROSS_CHECKED"
+    assert result.convention == "TOTAL_RETURN_ADJUSTED"
+    assert result.informative_events == 21
+    assert result.convention_consistency == pytest.approx(20 / 21)
+    # The raw-matching event corroborates prices; it is not a contradiction.
+    assert result.disagreement_sessions == ()
+
+
+def test_mixed_convention_history_is_single_source_not_quarantined() -> None:
+    # Half the events match the raw convention (provider silent on the
+    # dividend), half match total-return: no contradiction, no dominant
+    # convention — the single-source watermark stands, nothing is quarantined.
+    sessions = pd.bdate_range("2020-01-06", periods=41)
+    dividend = 2.0
+    raw = [100.0]
+    adjusted = [100.0]
+    dividends = []
+    for step in range(1, 41):
+        is_event = step % 2 == 0
+        dividends.append(dividend if is_event else 0.0)
+        raw.append(raw[-1] * (0.98 if is_event else 1.001))
+        adjusted.append(
+            adjusted[-1] * ((0.98 + dividend / raw[-2]) if is_event else 1.001)
+        )
+    dividends = [0.0, *dividends]
+    stooq = [100.0]
+    for step in range(1, 41):
+        follows_raw = step <= 20
+        reference = raw if follows_raw else adjusted
+        stooq.append(stooq[-1] * (reference[step] / reference[step - 1]))
+    frame_a = pd.DataFrame({"session": sessions, "close": stooq})
+    frame_b = pd.DataFrame(
+        {
+            "session": sessions,
+            "close": raw,
+            "adjusted_close": adjusted,
+            "dividend": dividends,
+            "split_factor": 1.0,
+        }
+    )
+    result = cross_check_actions_implied_ratios(frame_a, frame_b, symbol="AAA")
+    assert result.classification == "ACTIONS_MIXED_CONVENTION"
+    assert result.disagreement_sessions == ()
+    assert "SINGLE_SOURCE_ACTIONS" in result.provenance_warning
+
+
+def test_actions_cross_check_keeps_single_source_for_tiny_dividends() -> None:
+    frame_a, frame_b = _actions_fixture(
+        [100.0, 100.0], dividend=0.10, yahoo_closes=[100.0, 100.0]
+    )
+    result = cross_check_actions_implied_ratios(frame_a, frame_b, symbol="AAA")
+    assert result.classification == "ACTIONS_UNCHECKABLE"
+    assert "SINGLE_SOURCE_ACTIONS" in result.provenance_warning
 
 
 def test_nyse_early_close_and_good_friday_opex() -> None:

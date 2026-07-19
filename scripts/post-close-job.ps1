@@ -1,0 +1,24 @@
+# Nightly post-close job. Schedule for ~16:35 ET (22:35 CET in summer):
+#   see scripts/install-autostart.ps1
+#
+# Regenerates the five-name basket signal from the completed close, appends
+# fills/marks/exits to the append-only forward ledger, refreshes the tailwind
+# calendars, and logs a one-line summary. Idempotent; safe to re-run.
+#
+# Optional Telegram push (fresh-basket summary to your phone): create a bot
+# with @BotFather, message it once, then set USER environment variables and
+# the next run notifies automatically:
+#   setx EDGESTACK_TELEGRAM_TOKEN "<bot token>"
+#   setx EDGESTACK_TELEGRAM_CHAT  "<your chat id>"
+
+$ErrorActionPreference = "Stop"
+Set-Location (Join-Path $PSScriptRoot "..")
+$log = "artifacts/advisor/post-close-job.log"
+New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
+"=== post-close run $(Get-Date -Format o) ===" | Out-File $log -Append
+python -m edgestack.cli post-close 2>&1 | Out-File $log -Append
+$postCloseExit = $LASTEXITCODE
+# Forward intraday capture (no-op without free Alpaca keys); never fails the job.
+python -m edgestack.data.intraday_collector 2>&1 | Out-File $log -Append
+"=== exit $postCloseExit $(Get-Date -Format o) ===" | Out-File $log -Append
+exit $postCloseExit

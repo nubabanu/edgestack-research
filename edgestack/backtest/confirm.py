@@ -9,7 +9,7 @@ from importlib import metadata
 
 import numpy as np
 
-from edgestack.backtest.costs import CostModel
+from edgestack.backtest.costs import DEFAULT_ADV_FALLBACK_DOLLARS, CostModel
 from edgestack.backtest.engine import BacktestResult
 from edgestack.models import HypothesisSpec, ensure_fill_after_signal
 from edgestack.stats._types import FloatArray
@@ -22,7 +22,7 @@ class ConfirmationData:
     signal: FloatArray
     returns: FloatArray
     timestamps: tuple[datetime, ...]
-    adv_dollars: float | FloatArray = 100_000_000.0
+    adv_dollars: float | FloatArray = DEFAULT_ADV_FALLBACK_DOLLARS
     asset_type: str = "equity"
 
 

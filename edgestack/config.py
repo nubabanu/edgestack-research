@@ -115,6 +115,10 @@ class DataConfig(StrictModel):
     outlier_sigma: float = 10.0
     stale_sessions: int = 3
     holdout_years: int = 3
+    # Reconstruct best-effort PIT membership intervals from the Wikipedia
+    # change log and fetch delisted-name history from the bulk archive. The
+    # result stays tiered PIT_APPROXIMATION — never licensed PIT evidence.
+    universe_pit: bool = False
 
 
 class GridConfig(StrictModel):
@@ -127,6 +131,10 @@ class GridConfig(StrictModel):
     placebo_replicates: int = 2
     include_cross_sectional: bool = True
     min_observations: int = 100
+    # Opt-in post-original families (quarter/month-end windows, Amihud,
+    # MAX-lottery, overnight/intraday gap, ETF relative reversal). Off by
+    # default so pre-existing campaign grids stay identical.
+    extended_families: bool = False
 
 
 class StatsConfig(StrictModel):
@@ -140,6 +148,35 @@ class StatsConfig(StrictModel):
     finalist_bootstrap_reps: int = 10_000
     survivor_fraction_max: float = 0.05
     placebo_survival_max: float = 0.005
+    # Family-wide SPA/Reality-Check significance level; 0.05 preserves the
+    # original hardcoded behavior exactly.
+    family_alpha: float = 0.05
+    # Per-survivor truncation-invariance and extra-lag causality checks run
+    # after the discovery gauntlet; frozen campaigns never re-run discovery.
+    survivor_causality_checks: bool = True
+
+    @model_validator(mode="after")
+    def validate_family_alpha(self) -> StatsConfig:
+        """Keep the family-test level a genuine significance level."""
+
+        if not 0.0 < self.family_alpha < 1.0:
+            raise ValueError("family_alpha must lie strictly between zero and one")
+        return self
+
+
+class HoldoutGateConfig(StrictModel):
+    """Versioned final-holdout promotion evaluator.
+
+    ``SIGN_V1`` preserves the original strictly-positive-mean gate exactly.
+    ``CI_V2`` additionally requires the stationary-bootstrap confidence
+    interval lower bound of every edge and of the composite to be strictly
+    positive, and emits report-only regime stratification of the holdout
+    streams. The version is bound into the freeze manifest at score time and
+    cannot change afterwards; existing sealed holdouts stay sealed under the
+    version they were frozen with.
+    """
+
+    evaluator_version: Literal["SIGN_V1", "CI_V2"] = "SIGN_V1"
 
 
 class EvidenceProtocolConfig(StrictModel):
@@ -237,6 +274,9 @@ class CostConfig(StrictModel):
     easy_borrow_annual: float = 0.003
     turnover_penalty_bps: float = 1.0
     sensitivity_multipliers: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0)
+    # MEASURED_HL_FLOOR_V2 overlays per-name monthly high-low spread estimates
+    # floored at the assumed baseline; measured values can only RAISE costs.
+    spread_source: Literal["ASSUMED_V1", "MEASURED_HL_FLOOR_V2"] = "ASSUMED_V1"
 
 
 class EntryTimingConfig(StrictModel):
@@ -284,6 +324,9 @@ class ReversalResearchConfig(StrictModel):
     require_point_in_time_universe: bool = True
     allow_survivorship_biased_diagnostic: bool = False
     gpu_devices: tuple[int, ...] = (0, 1)
+    # MEASURED_HL_FLOOR_V2 prices the grid with per-name monthly high-low
+    # spread estimates floored at the assumed baseline (costs only tighten).
+    spread_source: Literal["ASSUMED_V1", "MEASURED_HL_FLOOR_V2"] = "ASSUMED_V1"
 
     @field_validator("decision_time")
     @classmethod
@@ -366,6 +409,7 @@ class EdgeStackConfig(StrictModel):
     grid: GridConfig = Field(default_factory=GridConfig)
     stats: StatsConfig = Field(default_factory=StatsConfig)
     protocol: EvidenceProtocolConfig = Field(default_factory=EvidenceProtocolConfig)
+    holdout_gate: HoldoutGateConfig = Field(default_factory=HoldoutGateConfig)
     validation: ValidationConfig = Field(default_factory=ValidationConfig)
     costs: CostConfig = Field(default_factory=CostConfig)
     entrytiming: EntryTimingConfig = Field(default_factory=EntryTimingConfig)

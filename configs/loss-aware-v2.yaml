@@ -1,0 +1,29 @@
+campaign_namespace: loss-aware-v2
+historical_evidence: diagnostic_only
+promotion_evidence: new_forward_paper_observations
+v1_holdout_access: forbidden
+universe: historical_sp500_plus_nine_etfs
+horizons:
+  monthly:
+    signal: completed_month_end
+    execution: next_session
+    hold_sessions: 21
+  yearly:
+    signal: completed_month_end
+    execution: next_session
+    hold_sessions: 252
+families:
+  - momentum_252_skip_21
+  - reversal_5
+  - low_volatility_252
+  - high_price_proximity_252
+  - equal_rank_composite
+basket_size: 5
+portfolio_forms: [long_only, short_only, market_neutral]
+gross_leverage: [1.0, 1.5, 2.0]
+financing_spread_over_sofr: 0.03
+event_veto:
+  pre_entry_sessions: 5
+  gap_percent: [0.03, 0.05, 0.08]
+  gap_atr: [1.5, 2.0, 2.5]
+ranking_default: loss_first

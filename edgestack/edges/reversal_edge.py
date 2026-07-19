@@ -25,7 +25,11 @@ import pandas as pd
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import yaml
 
-from edgestack.backtest.costs import CostAssumptions, CostModel
+from edgestack.backtest.costs import (
+    DEFAULT_ADV_FALLBACK_DOLLARS,
+    CostAssumptions,
+    CostModel,
+)
 from edgestack.backtest.engine import (
     BacktestResult,
     aggregate_cross_sectional_returns,
@@ -65,6 +69,11 @@ HOLDOUT_PROGRAM_ID: Final = "EDGESTACK_US_EQUITY_RESEARCH_V1"
 HOLDOUT_MARKET: Final = "XNYS_US_EQUITIES"
 HOLDOUT_PROMOTION_CLASS: Final = "FINAL"
 
+# Per-name cap is gross_exposure / top_k = 0.5 / 5; the trailing 1e-12-scale
+# epsilon absorbs float accumulation in cohort-target sums without loosening
+# the economic 10% limit.
+NAME_CAP_LIMIT_WITH_FLOAT_TOLERANCE: Final = 0.100000000001
+
 
 @dataclass(frozen=True, slots=True)
 class ReversalComputation:
@@ -87,7 +96,32 @@ def _load_config(path: str | Path) -> dict[str, Any]:
     payload = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("reversal edge configuration must be a mapping")
-    return cast(dict[str, Any], payload)
+    config = cast(dict[str, Any], payload)
+    _require_consistent_trial_count(config)
+    return config
+
+
+def _require_consistent_trial_count(config: Mapping[str, Any]) -> None:
+    """Reject a config whose duplicated global trial count declarations diverge.
+
+    The frozen edge config declares ``conservative_global_trial_count`` in both
+    the selection rationale and the pre-holdout validation block; DSR deflation
+    reads only the validation copy, so a silent divergence would let the
+    rationale misrepresent the deflation actually applied.
+    """
+
+    declarations = {
+        section: int(cast(Mapping[str, Any], config[section])[key])
+        for section in ("selection_rationale", "preholdout_validation")
+        for key in ("conservative_global_trial_count",)
+        if isinstance(config.get(section), Mapping)
+        and key in cast(Mapping[str, Any], config[section])
+    }
+    if len(set(declarations.values())) > 1:
+        raise ValueError(
+            "conservative_global_trial_count declarations diverge: "
+            f"{declarations!r}"
+        )
 
 
 def _parse_date(value: object) -> date:
@@ -268,9 +302,9 @@ def _compute(
     adv = close.mul(prepared.volume).rolling(20, min_periods=1).mean().shift(1)
     adv_values = np.nan_to_num(
         adv.to_numpy(dtype=float),
-        nan=100_000_000.0,
-        posinf=100_000_000.0,
-        neginf=100_000_000.0,
+        nan=DEFAULT_ADV_FALLBACK_DOLLARS,
+        posinf=DEFAULT_ADV_FALLBACK_DOLLARS,
+        neginf=DEFAULT_ADV_FALLBACK_DOLLARS,
     )
     desired_positions = lag_positions(targets, execution_lag=2)
     positions = _execute_with_fill_availability(
@@ -990,7 +1024,8 @@ def _evaluate_preholdout(
         "placebos": controls_pass,
         "parent_stream_reconstruction": bool(parent["stream_reconstruction_match"]),
         "zipline_confirmation": bool(confirmation["passed"]),
-        "name_cap": float(np.nanmax(run.positions)) <= 0.100000000001,
+        "name_cap": float(np.nanmax(run.positions))
+        <= NAME_CAP_LIMIT_WITH_FLOAT_TOLERANCE,
         "gross_cap": float(np.nanmax(np.abs(run.positions).sum(axis=1)))
         <= float(cast(Mapping[str, Any], config["strategy"])["gross_exposure"]) + 1e-12,
     }
@@ -1052,6 +1087,121 @@ def _write_json(
 
 def _artifact_root(base: Path, campaign_id: str) -> Path:
     return base / "artifacts" / "campaigns" / campaign_id
+
+
+def run_cpcv_diagnostic(config_path: str | Path, *, root: str | Path = ".") -> Path:
+    """Report-only CPCV/PBO of the selected rule within its 30-rule parent grid.
+
+    The parent grid was only ever CPCV'd as a family before selection; this
+    recomputes PBO and the selected rule's out-of-sample ranks restricted to
+    ``research_start → preholdout_end_exclusive``. Sessions on or after the
+    sealed holdout start are hard-excluded, and the output is stamped
+    ``POST_HOLDOUT_DIAGNOSTIC_REPORT_ONLY`` — it can never change the sealed
+    verdict or the edge's (already non-promotable) status.
+    """
+
+    from edgestack.stats.tests import annualized_sharpe
+    from edgestack.validation.cpcv import combinatorial_purged_splits, cpcv_pbo
+
+    base = Path(root).resolve()
+    config = _load_config((base / config_path).resolve())
+    data = cast(Mapping[str, Any], config["data"])
+    cutoff = pd.Timestamp(str(data["preholdout_end_exclusive"]))
+    holdout_start = pd.Timestamp(str(data["holdout_start"]))
+    frame = pd.read_parquet(base / str(data["parent_net_returns_path"]))
+    sessions = pd.DatetimeIndex(pd.to_datetime(frame["session"]))
+    selected_rows = sessions < min(cutoff, holdout_start)
+    trimmed = frame.loc[np.asarray(selected_rows)]
+    trimmed_sessions = pd.DatetimeIndex(pd.to_datetime(trimmed["session"]))
+    if len(trimmed_sessions) == 0:
+        raise RuntimeError("no pre-holdout sessions available for the diagnostic")
+    if trimmed_sessions.max() >= holdout_start:
+        raise RuntimeError("CPCV diagnostic window overlaps the sealed holdout")
+    candidate = str(
+        cast(Mapping[str, Any], config["strategy"])["candidate_hypothesis_id"]
+    )
+    columns = [str(column) for column in trimmed.columns if column != "session"]
+    if candidate not in columns:
+        raise RuntimeError("selected candidate is absent from the parent streams")
+    matrix = np.nan_to_num(
+        trimmed.loc[:, columns].to_numpy(dtype=float), nan=0.0
+    )
+    validation = cast(Mapping[str, Any], config["preholdout_validation"])
+    n_groups = int(validation["cpcv_groups"])
+    n_test_groups = int(validation["cpcv_test_groups"])
+    purge = int(validation["purge_sessions"])
+    embargo = int(validation["embargo_sessions"])
+    pbo = cpcv_pbo(
+        matrix,
+        n_groups=n_groups,
+        n_test_groups=n_test_groups,
+        purge=purge,
+        embargo=embargo,
+    )
+    selected_column = columns.index(candidate)
+    splits = combinatorial_purged_splits(
+        matrix.shape[0],
+        n_groups=n_groups,
+        n_test_groups=n_test_groups,
+        purge=purge,
+        embargo=embargo,
+    )
+    selected_percentiles: list[float] = []
+    for split in splits:
+        test_sharpes = np.asarray(
+            [
+                annualized_sharpe(matrix[split.test_indices, strategy])
+                for strategy in range(len(columns))
+            ],
+            dtype=float,
+        )
+        value = test_sharpes[selected_column]
+        if not np.isfinite(test_sharpes).all():
+            continue
+        lower = int(np.count_nonzero(test_sharpes < value))
+        equal = int(np.count_nonzero(test_sharpes == value))
+        selected_percentiles.append((lower + (equal + 1.0) / 2.0) / len(columns))
+    payload: dict[str, Any] = {
+        "policy": "POST_HOLDOUT_DIAGNOSTIC_REPORT_ONLY",
+        "campaign_id": str(config["campaign_id"]),
+        "candidate_hypothesis_id": candidate,
+        "window": {
+            "first_session": trimmed_sessions.min().date().isoformat(),
+            "last_session": trimmed_sessions.max().date().isoformat(),
+            "preholdout_end_exclusive": cutoff.date().isoformat(),
+            "holdout_start_excluded": holdout_start.date().isoformat(),
+            "sessions": int(len(trimmed_sessions)),
+        },
+        "strategy_count": len(columns),
+        "cpcv": {
+            "n_groups": n_groups,
+            "n_test_groups": n_test_groups,
+            "purge_sessions": purge,
+            "embargo_sessions": embargo,
+            "n_splits": pbo.n_splits,
+        },
+        "pbo": pbo.pbo,
+        "pbo_defined": pbo.defined,
+        "pbo_reason": pbo.reason,
+        "selected_was_in_sample_winner_fraction": (
+            float(np.mean(pbo.selected_strategies == selected_column))
+            if pbo.defined
+            else None
+        ),
+        "selected_oos_rank_percentiles": selected_percentiles,
+        "selected_median_oos_rank_percentile": (
+            float(np.median(selected_percentiles)) if selected_percentiles else None
+        ),
+        "disclaimer": DISCLAIMER,
+    }
+    path = (
+        _artifact_root(base, str(config["campaign_id"]))
+        / "diagnostics"
+        / "selected_edge_cpcv.json"
+    )
+    payload["result_sha256"] = canonical_sha256(payload)
+    _write_json(path, payload)
+    return path
 
 
 def run_preholdout(
@@ -1421,7 +1571,10 @@ def _evaluate_holdout(
     terminal = float(np.prod(1.0 + net))
     net_hac = hac_mean_test(net, holding_period=5, alternative="greater")
     excess_hac = hac_mean_test(excess, holding_period=5, alternative="greater")
-    name_cap = float(np.nanmax(run.positions[selected])) <= 0.100000000001
+    name_cap = (
+        float(np.nanmax(run.positions[selected]))
+        <= NAME_CAP_LIMIT_WITH_FLOAT_TOLERANCE
+    )
     gross_cap = float(np.nanmax(np.abs(run.positions[selected]).sum(axis=1))) <= (
         float(cast(Mapping[str, Any], config["strategy"])["gross_exposure"]) + 1e-12
     )
@@ -1658,7 +1811,9 @@ def run_holdout(config_path: str | Path, *, root: str | Path = ".") -> Path:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("preholdout", "freeze", "holdout"))
+    parser.add_argument(
+        "command", choices=("preholdout", "freeze", "holdout", "cpcv-diagnostic")
+    )
     parser.add_argument("--config", default="configs/reversal-edge-v1.yaml")
     parser.add_argument("--root", default=".")
     parser.add_argument(
@@ -1675,6 +1830,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif arguments.command == "freeze":
         freeze(arguments.config, root=arguments.root)
+    elif arguments.command == "cpcv-diagnostic":
+        run_cpcv_diagnostic(arguments.config, root=arguments.root)
     else:
         run_holdout(arguments.config, root=arguments.root)
     return 0

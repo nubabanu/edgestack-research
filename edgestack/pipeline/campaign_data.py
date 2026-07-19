@@ -37,6 +37,7 @@ from edgestack.data.quality import (
     ReconciliationResult,
     audit_survivorship,
     causal_winsorize_prices,
+    cross_check_actions_implied_ratios,
     reconcile_action_stratified_returns,
     reconcile_adjusted_series,
     run_quality_audit,
@@ -400,7 +401,7 @@ async def _acquire_full(
     calendar = NYSECalendar()
     universe_source = WikipediaSP500UniverseSource(
         include_etfs=True,
-        reconstruct_history=False,
+        reconstruct_history=config.data.universe_pit,
         raw_sink=cache.raw,
         timeout=config.data.providers.timeout_seconds,
     )
@@ -542,7 +543,31 @@ async def _acquire_full(
     failures.update(reconciliation_failures)
     available = tuple(sorted(bars["symbol"].unique())) if not bars.empty else ()
     intended = tuple(item.symbol for item in assets)
+    # The tier stays SURVIVORSHIP_BIASED even under PIT reconstruction: the
+    # Wikipedia change log is a best-effort approximation, not licensed PIT
+    # evidence, so the watermark is only lifted by a licensed source.
     survivorship = audit_survivorship(intended, available, point_in_time=False)
+    if config.data.universe_pit:
+        # A delisted name with no recoverable price history is a reported
+        # coverage gap, not a campaign failure; only CURRENT constituents and
+        # ETFs must be complete for the universe gate.
+        current_symbols = {
+            item.asset.symbol for item in memberships if item.end is None
+        }
+        universe_complete = not (current_symbols - set(available))
+        missing_delisted = sorted(
+            {item.asset.symbol for item in memberships if item.end is not None}
+            - set(available)
+        )
+        if missing_delisted:
+            reference_warnings.append(
+                f"PIT_DELISTED_COVERAGE_GAP: {len(missing_delisted)} removed "
+                "constituents have no recoverable price history from any "
+                "provider; they are excluded from the research panel and "
+                "remain visible in the survivorship audit."
+            )
+    else:
+        universe_complete = not survivorship.missing_assets
     if bars.empty:
         # A structural empty report is preferable to an unhelpful groupby error.
         qa = QAReport(
@@ -614,7 +639,7 @@ async def _acquire_full(
         calendar_match,
         long_history,
         reconciliation_pass,
-        not survivorship.missing_assets,
+        universe_complete,
         False,
         fixed_symbol_evidence,
         correction_log_sha256,
@@ -826,6 +851,23 @@ async def _reconcile_fixed_symbols(
                 tolerance=config.data.reconciliation_tolerance,
                 required_fraction=config.data.reconciliation_required_fraction,
             )
+            cross_check = cross_check_actions_implied_ratios(
+                left_frame,
+                right_frame,
+                symbol=symbol,
+                tolerance=config.data.reconciliation_tolerance,
+                comparison_start=comparison_start,
+            )
+            if cross_check.classification == "ACTIONS_DISAGREEMENT":
+                result = replace(
+                    result,
+                    passed=False,
+                    provenance_warning=cross_check.provenance_warning,
+                )
+            elif cross_check.classification == "ACTIONS_CROSS_CHECKED":
+                result = replace(
+                    result, provenance_warning=cross_check.provenance_warning
+                )
         else:
             left_adjusted = left_frame.assign(
                 close=lambda frame: frame["adjusted_close"]

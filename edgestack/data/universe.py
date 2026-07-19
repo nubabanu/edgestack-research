@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
 from typing import Final
@@ -13,7 +13,7 @@ from typing import Final
 import httpx
 
 from edgestack.data.sources import RawPayload, RawPayloadSink
-from edgestack.models import AssetKey, MembershipInterval
+from edgestack.models import AssetKey, DataTier, MembershipInterval
 
 WIKIPEDIA_SP500_URL: Final = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 LIQUID_ETFS: Final[tuple[str, ...]] = (
@@ -306,6 +306,17 @@ class WikipediaSP500UniverseSource:
                     constituents, changes, start=start, end=end
                 )
             )
+            memberships = [
+                replace(
+                    item,
+                    available_at=fetched_at,
+                    source="wikipedia_change_log",
+                    data_tier=DataTier.PIT_APPROXIMATION,
+                    fetched_at=fetched_at,
+                    content_hash=digest,
+                )
+                for item in memberships
+            ]
             warnings = (
                 "PIT_APPROXIMATION: Wikipedia change-log reconstruction is incomplete "
                 "and is not a licensed point-in-time constituent database.",
@@ -313,11 +324,15 @@ class WikipediaSP500UniverseSource:
         else:
             memberships = [
                 MembershipInterval(
-                    AssetKey(item.symbol),
-                    start,
-                    None,
-                    item.sector,
-                    fetched_at,
+                    asset=AssetKey(item.symbol),
+                    start=start,
+                    end=None,
+                    sector=item.sector,
+                    available_at=fetched_at,
+                    source="wikipedia_current",
+                    data_tier=DataTier.SURVIVORSHIP_BIASED,
+                    fetched_at=fetched_at,
+                    content_hash=digest,
                 )
                 for item in constituents
             ]
@@ -328,11 +343,19 @@ class WikipediaSP500UniverseSource:
         if self.include_etfs:
             memberships.extend(
                 MembershipInterval(
-                    AssetKey(symbol, asset_type="etf"),
-                    start,
-                    None,
-                    "ETF",
-                    fetched_at,
+                    asset=AssetKey(symbol, asset_type="etf"),
+                    start=start,
+                    end=None,
+                    sector="ETF",
+                    available_at=fetched_at,
+                    source="wikipedia_campaign_etfs",
+                    data_tier=(
+                        DataTier.PIT_APPROXIMATION
+                        if self.reconstruct_history
+                        else DataTier.SURVIVORSHIP_BIASED
+                    ),
+                    fetched_at=fetched_at,
+                    content_hash=digest,
                 )
                 for symbol in LIQUID_ETFS
             )

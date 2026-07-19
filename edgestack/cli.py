@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import date
+import json
+from datetime import date, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 from rich.console import Console
 
+from edgestack.agenttools import app as agenttools_app
 from edgestack.config import load_config
 from edgestack.disclaimer import DISCLAIMER
 from edgestack.live.demo import run as run_demo
@@ -22,6 +24,7 @@ app = typer.Typer(
     epilog=DISCLAIMER,
 )
 console = Console()
+app.add_typer(agenttools_app, name="agent")
 
 
 @app.callback()
@@ -183,14 +186,614 @@ def live(
     once: Annotated[
         bool, typer.Option("--once", help="Run one scan instead of scheduling.")
     ] = False,
+    v2_database: Annotated[
+        Path | None,
+        typer.Option(
+            "--v2-database",
+            help="Loss-aware V2 forward ledger; bypasses V1 holdout access.",
+        ),
+    ] = None,
+    marks: Annotated[
+        Path | None,
+        typer.Option(
+            "--marks",
+            exists=True,
+            dir_okay=False,
+            help="Recorded causal marks JSON for a V2 --once replay.",
+        ),
+    ] = None,
 ) -> None:
     """Start the paper-only scanner/monitor after final holdout promotion."""
+
+    if v2_database is not None:
+        if not once:
+            raise typer.BadParameter("V2 forward marking currently requires --once")
+        from edgestack.live.state import StateStore
+
+        store = StateStore(v2_database)
+        if marks is not None:
+            payload = json.loads(marks.read_text(encoding="utf-8"))
+            if not isinstance(payload, list):
+                raise typer.BadParameter("--marks must contain a JSON list")
+            for item in payload:
+                store.record_paper_mark(
+                    str(item["decision_id"]),
+                    mark_at=datetime.fromisoformat(str(item["mark_at"])),
+                    available_at=datetime.fromisoformat(str(item["available_at"])),
+                    price=float(item["price"]),
+                    causal_data_hash=str(item["causal_data_hash"]),
+                )
+        console.print_json(data=store.paper_scorecard())
+        return
 
     from edgestack.pipeline.runner import CampaignRunner
 
     runner = CampaignRunner.open(load_config(config), campaign)
     result = runner.live(once=once)
     console.print(result)
+
+
+@app.command("loss-aware-v2")
+def loss_aware_v2(
+    campaign_id: Annotated[str, typer.Option("--campaign-id")],
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/loss-aware-v2.yaml"),
+    artifacts: Annotated[Path, typer.Option(file_okay=False)] = Path("artifacts"),
+) -> None:
+    """Create the isolated free-only V2 diagnostic and forward declaration."""
+
+    from edgestack.v2.campaign import create_free_only_diagnostic
+
+    output = create_free_only_diagnostic(
+        artifacts, campaign_id=campaign_id, config_path=config
+    )
+    console.print(f"V2 diagnostic written to [bold]{output}[/bold]")
+    console.print(
+        "PIT membership, estimate vintages, and auction execution are "
+        "DATA_UNAVAILABLE until hash-pinned entitled files are imported."
+    )
+
+
+@app.command()
+def advise(
+    symbol: Annotated[str, typer.Option("--symbol", help="Ticker, e.g. GLD, USO.")],
+    years: Annotated[int, typer.Option("--years", min=2, max=60)] = 20,
+    buy_date: Annotated[
+        str | None,
+        typer.Option(
+            "--buy-date",
+            metavar="YYYY-MM-DD",
+            help="Rate this intended buy session against active conditions.",
+        ),
+    ] = None,
+    buy_hour: Annotated[
+        str | None,
+        typer.Option(
+            "--buy-hour",
+            metavar="HH:MM",
+            help="ET clock time to rate; only the auction anchors are "
+            "measurable (open ~09:30, close 15:45-16:00).",
+        ),
+    ] = None,
+    bars: Annotated[
+        Path | None,
+        typer.Option(
+            "--bars",
+            exists=True,
+            dir_okay=False,
+            help="Offline bars parquet (symbol/session/adjusted_close); "
+            "skips the network fetch.",
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Write the JSON report here."),
+    ] = None,
+) -> None:
+    """Diagnostic per-instrument timing report: tailwinds, headwinds, windows.
+
+    NOT a validated edge and NOT an order. Daily bars only: execution anchors
+    are the opening/closing auctions; news is DATA_UNAVAILABLE by design.
+    """
+
+    import asyncio
+    from datetime import date as date_type
+    from datetime import timedelta
+
+    import pandas as pd
+
+    from edgestack.advisor import advise as build_report
+
+    warnings: tuple[str, ...] = ()
+    if bars is not None:
+        frame = pd.read_parquet(bars)
+    else:
+        from edgestack.data.sources import (
+            FallbackDailyBarSource,
+            StooqDailyBarSource,
+            YahooDailyBarSource,
+            bars_to_frame,
+        )
+        from edgestack.models import AssetKey, BarRequest
+
+        async def _fetch() -> tuple[pd.DataFrame, tuple[str, ...]]:
+            chain = FallbackDailyBarSource(
+                (StooqDailyBarSource(), YahooDailyBarSource())
+            )
+            batch = await chain.fetch_bars(
+                BarRequest(
+                    AssetKey(symbol.upper()),
+                    date_type.today() - timedelta(days=365 * years),
+                    date_type.today(),
+                    adjusted=True,
+                )
+            )
+            return bars_to_frame(batch), tuple(batch.warnings)
+
+        frame, warnings = asyncio.run(_fetch())
+    report = build_report(
+        frame,
+        symbol=symbol.upper(),
+        buy_session=_parse_iso_date(buy_date, "--buy-date"),
+        buy_hour=buy_hour,
+        provenance_warnings=warnings,
+        root=Path.cwd(),
+    )
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(report, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        console.print(f"Advisor report written to [bold]{output}[/bold]")
+    console.print_json(data=report)
+
+
+@app.command("post-close")
+def post_close(
+    campaign: Annotated[str, typer.Option("--campaign")] = (
+        "reversal-edge-v1-20260715-001"
+    ),
+    calendar_symbols: Annotated[
+        str,
+        typer.Option(
+            "--calendar-symbols",
+            help="Comma-separated symbols for tailwind calendars.",
+        ),
+    ] = "SPY,QQQ,GLD,ACN,CTSH",
+) -> None:
+    """Nightly post-close loop: fresh basket scan, forward ledger, calendars.
+
+    Refuses to run unless the campaign's gauntlet gates are PASS. Idempotent
+    per completed session; safe to re-run.
+    """
+
+    from edgestack.live.daily_job import run_post_close
+
+    summary = run_post_close(
+        campaign_id=campaign,
+        calendar_symbols=tuple(
+            symbol.strip().upper()
+            for symbol in calendar_symbols.split(",")
+            if symbol.strip()
+        ),
+    )
+    console.print_json(data=summary)
+
+
+@app.command("tailwind-calendar")
+def tailwind_calendar(
+    symbol: Annotated[str, typer.Option("--symbol", help="Ticker, e.g. SPY, QQQ, GLD, USO.")],
+    sessions: Annotated[int, typer.Option("--sessions", min=5, max=252)] = 63,
+    years: Annotated[int, typer.Option("--years", min=2, max=60)] = 20,
+    bars: Annotated[
+        Path | None,
+        typer.Option("--bars", exists=True, dir_okay=False, help="Offline bars parquet."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Write the JSON calendar here."),
+    ] = None,
+) -> None:
+    """Forward tailwind calendar with per-session win scores and anchors.
+
+    Daily granularity plus the two auction anchors; hourly and 15-minute
+    calendars are DATA_UNAVAILABLE by construction, never estimated.
+    """
+
+    import asyncio
+    from datetime import date as date_type
+    from datetime import timedelta
+
+    import pandas as pd
+
+    from edgestack.advisor import advise as build_report
+
+    warnings: tuple[str, ...] = ()
+    if bars is not None:
+        frame = pd.read_parquet(bars)
+    else:
+        from edgestack.data.sources import (
+            FallbackDailyBarSource,
+            StooqDailyBarSource,
+            YahooDailyBarSource,
+            bars_to_frame,
+        )
+        from edgestack.models import AssetKey, BarRequest
+
+        async def _fetch() -> tuple[pd.DataFrame, tuple[str, ...]]:
+            chain = FallbackDailyBarSource(
+                (StooqDailyBarSource(), YahooDailyBarSource())
+            )
+            batch = await chain.fetch_bars(
+                BarRequest(
+                    AssetKey(symbol.upper()),
+                    date_type.today() - timedelta(days=365 * years),
+                    date_type.today(),
+                    adjusted=True,
+                )
+            )
+            return bars_to_frame(batch), tuple(batch.warnings)
+
+        frame, warnings = asyncio.run(_fetch())
+    report = build_report(
+        frame,
+        symbol=symbol.upper(),
+        scan_sessions=sessions,
+        provenance_warnings=warnings,
+        root=Path.cwd(),
+    )
+    calendar = {
+        "status": report["status"],
+        "symbol": report["symbol"],
+        "as_of_session": report["as_of_session"],
+        "policy": report["alignment"]["policy"],
+        "anchors": report["timing"]["anchors"],
+        "calendar": report["alignment"]["calendar"],
+        "validated_edges": report["validated_edges"],
+        "provenance_warnings": report["provenance_warnings"],
+        "disclaimer": report["disclaimer"],
+    }
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(calendar, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        console.print(f"Tailwind calendar written to [bold]{output}[/bold]")
+    console.print_json(data=calendar)
+
+
+@app.command("universe-pit-audit")
+def universe_pit_audit(
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/full.yaml"),
+    start: Annotated[
+        str, typer.Option("--start", metavar="YYYY-MM-DD")
+    ] = "1996-01-01",
+    end: Annotated[str | None, typer.Option("--end", metavar="YYYY-MM-DD")] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", dir_okay=False, help="Write the JSON report here."),
+    ] = None,
+) -> None:
+    """Audit delisted-name price coverage for PIT universe reconstruction.
+
+    Crosses the Wikipedia S&P 500 change log against the hash-pinned Stooq
+    bulk archive member index. Report-only; decides how far back a
+    PIT_APPROXIMATION universe is honest.
+    """
+
+    import asyncio
+    from datetime import date as date_type
+
+    from edgestack.data.pit_audit import summarize_pit_coverage
+    from edgestack.data.sources import StooqBulkArchiveDailyBarSource
+    from edgestack.data.universe import WikipediaSP500UniverseSource
+
+    resolved = load_config(config)
+    providers = resolved.data.providers
+    if providers.stooq_bulk_archive is None or providers.stooq_bulk_sha256 is None:
+        raise typer.BadParameter(
+            "the config must pin data.providers.stooq_bulk_archive and "
+            "stooq_bulk_sha256",
+            param_hint="--config",
+        )
+    start_date = _parse_iso_date(start, "--start")
+    end_date = _parse_iso_date(end, "--end") or date_type.today()
+    assert start_date is not None
+    bulk = StooqBulkArchiveDailyBarSource(
+        providers.stooq_bulk_archive,
+        expected_sha256=providers.stooq_bulk_sha256,
+    )
+    changes = asyncio.run(
+        WikipediaSP500UniverseSource().membership_changes(start_date, end_date)
+    )
+    report = summarize_pit_coverage(
+        changes, bulk._members.keys(), start=start_date, end=end_date
+    )
+    report["archive_sha256"] = bulk.archive_sha256
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        console.print(f"PIT coverage report written to [bold]{output}[/bold]")
+    console.print_json(data=report)
+
+
+@app.command("universe-bias-delta")
+def universe_bias_delta_command(
+    campaign: Annotated[str, typer.Option("--campaign")],
+    artifacts: Annotated[
+        Path, typer.Option(file_okay=False, help="EdgeStack artifact directory.")
+    ] = Path("artifacts"),
+) -> None:
+    """Measure the survivorship-bias inflation of two replicated signals.
+
+    Report-only: reruns gross reversal/momentum decile streams on the
+    campaign's persisted bars with and without the PIT membership mask.
+    """
+
+    import pandas as pd
+
+    from edgestack.data.pit_audit import universe_bias_delta
+
+    campaign_root = artifacts / "campaigns" / campaign
+    bars_path = campaign_root / "data" / "bars.parquet"
+    universe_path = campaign_root / "data" / "universe.parquet"
+    for path in (bars_path, universe_path):
+        if not path.is_file():
+            raise typer.BadParameter(
+                f"missing campaign artifact: {path}", param_hint="--campaign"
+            )
+    report = universe_bias_delta(
+        pd.read_parquet(bars_path), pd.read_parquet(universe_path)
+    )
+    output = campaign_root / "diagnostics" / "universe_bias_delta.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    console.print(f"Bias-delta report written to [bold]{output}[/bold]")
+    console.print_json(data=report)
+
+
+@app.command("holdout-diagnostic")
+def holdout_diagnostic(
+    campaign: Annotated[str, typer.Option("--campaign")],
+    artifacts: Annotated[
+        Path, typer.Option(file_okay=False, help="EdgeStack artifact directory.")
+    ] = Path("artifacts"),
+) -> None:
+    """Report whether a sealed holdout result would pass the CI_V2 evaluator.
+
+    Reads only the persisted result document; the sealed verdict never changes.
+    """
+
+    from edgestack.pipeline.holdout import retro_ci_diagnostic
+
+    result_path = artifacts / "campaigns" / campaign / "holdout" / "result.json"
+    if not result_path.is_file():
+        raise typer.BadParameter(
+            f"no sealed holdout result at {result_path}", param_hint="--campaign"
+        )
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    console.print_json(data=retro_ci_diagnostic(payload))
+
+
+@app.command("paper-scorecard")
+def paper_scorecard(
+    database: Annotated[Path, typer.Option("--database", exists=True, dir_okay=False)],
+) -> None:
+    """Replay the V2 paper scorecard without network access or backfills."""
+
+    from edgestack.live.state import StateStore
+
+    console.print_json(data=StateStore(database).paper_scorecard())
+
+
+@app.command("oil-research")
+def oil_research(
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/oil-paper-v1.yaml"),
+    root: Annotated[
+        Path, typer.Option("--root", file_okay=False, help="Repository root.")
+    ] = Path("."),
+) -> None:
+    """Run the preregistered oil diagnostics and create the forward freeze."""
+
+    from edgestack.oil.research import run_oil_research
+
+    path = run_oil_research(config, root=root)
+    console.print(f"Oil forward governance written to [bold]{path}[/bold]")
+
+
+@app.command("oil-context")
+def oil_context(
+    spread_bps: Annotated[float, typer.Option("--spread-bps", min=0)],
+    overnight_fee_usd_per_unit: Annotated[
+        float, typer.Option("--overnight-fee-usd-per-unit", min=0)
+    ],
+    event_risk: Annotated[
+        str, typer.Option("--event-risk", help="NORMAL, ELEVATED, EXTREME, or UNKNOWN.")
+    ],
+    expires: Annotated[
+        str,
+        typer.Option(
+            "--expires", help="Timezone-aware ISO expiry, for example 2026-07-20T17:00-04:00."
+        ),
+    ],
+    note: Annotated[str, typer.Option("--note")] = "",
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Record short-lived manual spread, financing, and event-risk context."""
+
+    from datetime import UTC
+
+    from edgestack.oil.context import OilContextStore
+    from edgestack.oil.models import OilContext
+
+    normalized_risk = event_risk.strip().upper()
+    if normalized_risk not in {"NORMAL", "ELEVATED", "EXTREME", "UNKNOWN"}:
+        raise typer.BadParameter("expected NORMAL, ELEVATED, EXTREME, or UNKNOWN", param_hint="--event-risk")
+    expiry = _parse_iso_datetime(expires, "--expires")
+    now = datetime.now(UTC)
+    context = OilContext(
+        recorded_at=now,
+        expires_at=expiry,
+        spread_bps=spread_bps,
+        overnight_fee_usd_per_unit=overnight_fee_usd_per_unit,
+        event_risk=normalized_risk,
+        note=note,
+    )
+    path = OilContextStore(artifacts / "oil" / "context.json").write(context)
+    console.print(f"Expiring oil context written to [bold]{path}[/bold]")
+
+
+@app.command("oil-decision")
+def oil_decision(
+    paper_equity: Annotated[
+        float, typer.Option("--paper-equity", min=0.01, help="Current paper equity in USD.")
+    ],
+    as_of: Annotated[
+        str | None,
+        typer.Option(
+            "--as-of",
+            help="Timezone-aware ISO timestamp, or a date interpreted as 08:30 ET.",
+        ),
+    ] = None,
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/oil-paper-v1.yaml"),
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Emit and append one paper-only oil snapshot; never contact a broker."""
+
+    import asyncio
+    from datetime import UTC
+
+    from edgestack.oil.decision import (
+        build_oil_snapshot,
+        fetch_oil_inputs,
+        load_oil_config,
+    )
+
+    moment = _parse_oil_as_of(as_of) if as_of else datetime.now(UTC)
+    resolved = load_oil_config(config)
+    inputs = asyncio.run(
+        fetch_oil_inputs(as_of=moment, artifact_root=artifacts, config=resolved)
+    )
+    snapshot = build_oil_snapshot(
+        inputs,
+        paper_equity_usd=paper_equity,
+        as_of=moment,
+        config=resolved,
+        artifact_root=artifacts,
+    )
+    console.print_json(data=snapshot.model_dump(mode="json"))
+
+
+@app.command("oil-scorecard")
+def oil_scorecard(
+    campaign: Annotated[str, typer.Option("--campaign")],
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Replay the append-only oil campaign scorecard without network access."""
+
+    from edgestack.oil.ledger import OilLedger
+
+    payload = OilLedger(artifacts / "oil" / "forward.sqlite").scorecard()
+    payload["campaign_id"] = campaign
+    console.print_json(data=payload)
+
+
+@app.command("oil-paper-mark")
+def oil_paper_mark(
+    decision_id: Annotated[str, typer.Option("--decision-id")],
+    horizon: Annotated[str, typer.Option("--horizon")],
+    lane: Annotated[str, typer.Option("--lane")],
+    price: Annotated[float, typer.Option("--price", min=0.000001)],
+    units: Annotated[float, typer.Option("--units", min=0)],
+    available_at: Annotated[str, typer.Option("--available-at")],
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Append an optional manual eToro paper mark; this is never an order."""
+
+    from edgestack.oil.ledger import OilLedger
+
+    inserted = OilLedger(artifacts / "oil" / "forward.sqlite").record_event(
+        decision_id,
+        horizon=horizon.upper(),
+        lane=lane.upper(),
+        event="ETORO_MARK",
+        available_at=_parse_iso_datetime(available_at, "--available-at"),
+        price=price,
+        units=units,
+        source="MANUAL_ETORO_PAPER_MARK",
+    )
+    console.print("Paper mark appended." if inserted else "Paper mark already present.")
+
+
+@app.command("oil-schedule")
+def oil_schedule(
+    paper_equity: Annotated[float, typer.Option("--paper-equity", min=0.01)],
+    config: Annotated[
+        Path, typer.Option("--config", exists=True, dir_okay=False)
+    ] = Path("configs/oil-paper-v1.yaml"),
+    artifacts: Annotated[
+        Path, typer.Option("--artifacts", file_okay=False)
+    ] = Path("artifacts"),
+) -> None:
+    """Run the four fixed ET oil-paper refreshes until interrupted."""
+
+    import asyncio
+    import threading
+    from datetime import UTC
+
+    from edgestack.oil.decision import (
+        build_oil_snapshot,
+        fetch_oil_inputs,
+        load_oil_config,
+    )
+    from edgestack.oil.scheduler import build_oil_scheduler
+
+    resolved = load_oil_config(config)
+
+    def refresh(reason: str) -> None:
+        moment = datetime.now(UTC)
+        inputs = asyncio.run(
+            fetch_oil_inputs(as_of=moment, artifact_root=artifacts, config=resolved)
+        )
+        snapshot = build_oil_snapshot(
+            inputs,
+            paper_equity_usd=paper_equity,
+            as_of=moment,
+            config=resolved,
+            artifact_root=artifacts,
+        )
+        console.print(f"{reason}: {snapshot.status} ({snapshot.decision_id})")
+
+    scheduler = build_oil_scheduler(
+        refresh, schedule_config=cast(dict[str, object], resolved["scheduling"])
+    )
+    scheduler.start()
+    console.print("Oil paper scheduler started; Ctrl+C stops it.")
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        scheduler.shutdown(wait=False)
 
 
 @app.command("live-demo")
@@ -205,6 +808,54 @@ def live_demo(
     console.print(counts)
     if counts.get("sent") != counts.get("receiver_unique"):
         raise typer.Exit(1)
+
+
+@app.command("mobile-api")
+def mobile_api(
+    host: Annotated[
+        str,
+        typer.Option(help="Bind address; use 0.0.0.0 only on a trusted network."),
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8765,
+    token: Annotated[
+        str | None,
+        typer.Option(
+            envvar="EDGESTACK_MOBILE_TOKEN",
+            help="Bearer token. Required unless --demo is used.",
+        ),
+    ] = None,
+    campaign: Annotated[
+        str | None,
+        typer.Option(
+            help="Targeted campaign whose sealed mobile artifacts are served."
+        ),
+    ] = None,
+    artifacts: Annotated[
+        Path, typer.Option(file_okay=False, help="EdgeStack artifact directory.")
+    ] = Path("artifacts"),
+    demo: Annotated[
+        bool,
+        typer.Option(help="Serve packaged offline demonstration data."),
+    ] = False,
+) -> None:
+    """Serve the read-only Android companion API; never accepts orders."""
+
+    import uvicorn
+
+    from edgestack.mobile.api import create_mobile_app
+
+    if not demo and (token is None or len(token) < 24):
+        raise typer.BadParameter(
+            "a bearer token of at least 24 characters is required outside demo mode",
+            param_hint="--token / EDGESTACK_MOBILE_TOKEN",
+        )
+    application = create_mobile_app(
+        artifact_root=artifacts,
+        campaign_id=campaign,
+        bearer_token=token,
+        demo=demo,
+    )
+    uvicorn.run(application, host=host, port=port, access_log=False)
 
 
 def _run_phase(phase: str, campaign: str, config: Path) -> None:
@@ -251,6 +902,35 @@ def _parse_iso_date(value: str | None, option_name: str) -> date | None:
             param_hint=option_name,
         )
     return parsed
+
+
+def _parse_iso_datetime(value: str, option_name: str) -> datetime:
+    """Parse a timezone-aware ISO timestamp, accepting the common Z suffix."""
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise typer.BadParameter(
+            "expected a timezone-aware ISO timestamp", param_hint=option_name
+        ) from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise typer.BadParameter(
+            "timestamp must include a UTC offset or Z", param_hint=option_name
+        )
+    return parsed
+
+
+def _parse_oil_as_of(value: str) -> datetime:
+    """Interpret date-only oil replays at the configured 08:30 ET checkpoint."""
+
+    from datetime import time
+    from zoneinfo import ZoneInfo
+
+    try:
+        day = date.fromisoformat(value)
+    except ValueError:
+        return _parse_iso_datetime(value, "--as-of")
+    return datetime.combine(day, time(8, 30), tzinfo=ZoneInfo("America/New_York"))
 
 
 if __name__ == "__main__":
