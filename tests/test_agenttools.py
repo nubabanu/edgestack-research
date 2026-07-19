@@ -61,6 +61,7 @@ def test_describe_lists_every_command() -> None:
         "tom",
         "oil",
         "gates",
+        "leverage-check",
     }
     assert "honesty_contract" in payload
 
@@ -145,6 +146,61 @@ def test_overview_degrades_gracefully_without_artifacts(tmp_path: Path) -> None:
     assert "disclaimer" in payload
     # Degrading must not create artifacts as a side effect.
     assert not (tmp_path / "artifacts").exists()
+
+
+@pytest.fixture(scope="module")
+def ohlc_bars() -> pd.DataFrame:
+    """Calm drift with one planted -30% intraday crash two years from the end."""
+
+    sessions = NYSECalendar().sessions("2016-01-04", "2023-12-29")
+    rng = np.random.default_rng(20260720)
+    returns = rng.normal(0.0005, 0.008, len(sessions))
+    crash = len(sessions) - 500
+    returns[crash] = -0.30
+    closes = 100.0 * np.cumprod(1.0 + returns)
+    lows = closes * (1.0 - np.abs(rng.normal(0.004, 0.003, len(sessions))))
+    lows[crash] = closes[crash] * 0.97
+    highs = closes * (1.0 + np.abs(rng.normal(0.004, 0.003, len(sessions))))
+    return pd.DataFrame(
+        {
+            "symbol": "MU",
+            "session": sessions,
+            "open": closes,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "adjusted_close": closes,
+        }
+    )
+
+
+def test_leverage_check_reports_conditions_and_caveats(
+    monkeypatch: pytest.MonkeyPatch, ohlc_bars: pd.DataFrame
+) -> None:
+    monkeypatch.setattr(
+        agenttools, "_fetch_bars", lambda symbol, years: (ohlc_bars, ())
+    )
+    payload = _invoke(["leverage-check", "MU", "--leverage", "5"])
+    assert payload["status"] == "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER"
+    assert set(payload["conditions"]) == {"any_entry", "calm_regime", "calm_and_dip"}
+    any_entry = payload["conditions"]["any_entry"]
+    assert any_entry["n"] > 100
+    # Positions holding through the planted -30% crash day are liquidated
+    # at 5x (threshold 10%), so the rate must be visibly nonzero.
+    assert any_entry["liquidated_fraction"] > 0.0
+    assert any_entry["max_leverage_95pct_survival"] is not None
+    assert "CLEAN_LIQUIDATION_ASSUMED_GAPS_MAKE_TAILS_WORSE" in payload["caveats"]
+    assert "disclaimer" in payload
+
+
+def test_leverage_check_flags_tiny_samples(
+    monkeypatch: pytest.MonkeyPatch, ohlc_bars: pd.DataFrame
+) -> None:
+    short = ohlc_bars.tail(260).reset_index(drop=True)
+    monkeypatch.setattr(agenttools, "_fetch_bars", lambda symbol, years: (short, ()))
+    payload = _invoke(["leverage-check", "MU", "--horizon", "60"])
+    # 260 sessions leave almost no complete windows after the SMA200 warmup.
+    assert payload["conditions"]["any_entry"]["status"] == "TOO_FEW_ENTRIES"
 
 
 def test_gates_and_oil_report_missing_stores(tmp_path: Path) -> None:
