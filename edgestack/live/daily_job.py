@@ -289,7 +289,7 @@ def run_post_close(
     *,
     root: str | Path = ".",
     campaign_id: str = DEFAULT_CAMPAIGN,
-    calendar_symbols: tuple[str, ...] = ("SPY", "QQQ", "GLD"),
+    calendar_symbols: tuple[str, ...] = ("SPY", "QQQ", "GLD", "ACN", "CTSH"),
 ) -> dict[str, Any]:
     """Run the complete nightly loop; every step is idempotent per session."""
 
@@ -318,7 +318,7 @@ def run_post_close(
         _fetch_panel(fetch_symbols, as_of - timedelta(days=120), as_of)
     )
     # Calendar symbols need deep history for the advisor's conditional
-    # statistics; three long series are cheap compared to the universe sweep.
+    # statistics; a few long series are cheap compared to the universe sweep.
     calendar_panel = asyncio.run(
         _fetch_panel(
             tuple(calendar_symbols), as_of - timedelta(days=365 * 20), as_of
