@@ -1,0 +1,66 @@
+# PREREGISTRATION — committed before any evaluation of this family is run.
+# Any change to this file after the first evaluation is a NEW campaign; the
+# original declaration stays in git history as the binding record.
+campaign_id: momentum-xs-study-v1-20260719-001
+declared_on: '2026-07-19'
+revision_context: ORIGINAL_PREREGISTRATION_NO_EVALUATION_RUN
+
+motivation:
+  source_evidence: >
+    The failed trend family was TIME-SERIES momentum on ETFs; the
+    cross-sectional winner effect is a distinct, more robust literature and
+    has never been tested here. Monthly rebalance keeps the declared cost
+    model survivable.
+  literature:
+    - Jegadeesh, Titman (1993, 2001) — 12-1 and 6-1 winner persistence
+    - Asness, Moskowitz, Pedersen (2013) — value and momentum everywhere
+    - Novy-Marx (2012) — intermediate-horizon momentum (the skip month)
+  economic_rationale: >
+    Underreaction and herding sustain relative-strength persistence at
+    3-12 month horizons; skipping the last month avoids the short-term
+    reversal that the validated basket already harvests.
+
+declared_family:
+  universe: sealed full-campaign equity panel (current S&P 500 membership;
+    SURVIVORSHIP_BIASED and stamped as such)
+  signals:
+    - mom_12_1_top_decile     # trailing 252-21 session return, top decile
+    - mom_12_1_top_quintile   # same feature, top quintile
+    - mom_6_1_top_decile      # trailing 126-21 session return, top decile
+  portfolio: equal-weight entry at each month-end close with buy-and-hold
+    drift inside the month; minimum 30 names else flat
+  direction: LONG_ONLY_VS_CASH
+  short_side_excluded_reason: loser shorts are hard-to-borrow and crash-prone
+    (momentum crashes); borrow economics are not modeled
+  rebalance: month-end close only (MOC); membership fixed intramonth
+  real_trial_count: 3
+  placebo_controls_per_trial: 2
+  accounting_family_size: 9
+
+execution_contract:
+  entry_exit: MOC on the final session of each month for names entering or
+    leaving; decision frozen 15:45 America/New_York on features that use
+    only sessions up to t-21
+  costs: >
+    Full declared cost model per NAME CHANGED at each rebalance plus the
+    preregistered 0.5x/1x/2x/4x sensitivity ladder. Cash earns zero.
+
+validation_protocol:
+  discovery_thresholds: LITERATURE_V2 (directed HAC t >= 3.8, BH q 0.05,
+    DSR >= 0.95 at accounting family size 9, Romano-Wolf alpha 0.05,
+    White/Hansen family p < 0.05)
+  risk_report: Sharpe, max drawdown, terminal wealth vs buy-and-hold REPORTED
+  oos: expanding walk-forward (5y min train, 1y test) and CPCV (6 groups,
+    2 test, 21 purge/embargo) with PBO < 0.20
+  causality: per-survivor truncation invariance and extra-lag checks
+  confirmation: independent event-loop replication of every finalist
+
+holdout:
+  policy: FORWARD_ONLY
+  start: '2026-07-19'
+  end: '2028-07-19'
+  note: single-use; interim looks forbidden
+  evaluator: net mean AND stationary-bootstrap CI lower bound > 0 (CI_V2)
+
+status: DECLARED_AWAITING_IMPLEMENTATION
+live_capital: PAPER_ONLY
