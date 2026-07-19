@@ -1,0 +1,81 @@
+# PREREGISTRATION — committed before any evaluation of this family is run.
+# Any change to this file after the first evaluation is a NEW campaign; the
+# original declaration stays in git history as the binding record.
+campaign_id: lowvol-study-v1-20260719-001
+declared_on: '2026-07-19'
+revision_context: ORIGINAL_PREREGISTRATION_NO_EVALUATION_RUN
+
+motivation:
+  source_evidence: >
+    Monthly rebalancing keeps declared costs small, and the sealed
+    full-campaign panel already carries the daily bars and dollar volume
+    needed to rank the cross-section causally. The known survivorship bias
+    of the panel is stamped on the result, not hidden.
+  literature:
+    - Ang, Hodrick, Xing, Zhang (2006) — low idiosyncratic-volatility premium
+    - Blitz, van Vliet (2007) — the volatility effect in global equities
+    - Baker, Bradley, Wurgler (2011) — benchmark limits and low-risk anomaly
+    - Frazzini, Pedersen (2014) — betting against beta (long leg only here)
+  economic_rationale: >
+    Leverage constraints and lottery preferences push demand toward
+    high-volatility stocks, structurally overpricing them; the calm end of
+    the cross-section earns a higher risk-adjusted return.
+
+declared_family:
+  # 3 real trials; every one is evaluated, reported, and counted. Placebo
+  # controls (SHUFFLED_DATE and MATCHED_RANDOM, two per real trial) extend
+  # the accounting family to 9.
+  universe: sealed full-campaign equity panel (current S&P 500 membership;
+    SURVIVORSHIP_BIASED and stamped as such)
+  signals:
+    - vol_252_bottom_decile    # trailing 252-session daily return volatility
+    - vol_63_bottom_decile     # trailing 63-session daily return volatility
+    - beta_252_bottom_decile   # trailing 252-session OLS beta versus SPY
+  portfolio: equal-weight bottom decile (minimum 30 names, else the trial
+    is flat that month), reformed at each month-end close
+  direction: LONG_ONLY_VS_CASH
+  short_side_excluded_reason: high-vol shorts are hard-to-borrow lottery
+    names; borrow economics are not modeled by the declared cost engine
+  rebalance: month-end close only (MOC); membership fixed intramonth
+  real_trial_count: 3
+  placebo_controls_per_trial: 2
+  accounting_family_size: 9
+
+execution_contract:
+  entry_exit: MOC on the final session of each month for names entering or
+    leaving the decile; decision frozen 15:45 America/New_York using data
+    through the PRIOR session only
+  costs: >
+    Full declared cost model per NAME CHANGED at each rebalance (half-spread
+    per fill, base slippage, square-root impact of the 1/N slice at $100k
+    capital, turnover penalty), plus the preregistered 0.5x/1x/2x/4x
+    sensitivity ladder. Cash earns zero.
+
+validation_protocol:
+  discovery_thresholds: LITERATURE_V2 (directed HAC t >= 3.8 on the
+    timing-minus-nothing net stream, BH q 0.05, DSR >= 0.95 at the accounting
+    family size 9, Romano-Wolf alpha 0.05, White/Hansen family p < 0.05)
+  risk_report: Sharpe, max drawdown, and terminal wealth versus buy-and-hold
+    are REPORTED for every trial; they are context, not gates
+  oos: expanding walk-forward (5y min train, 1y test) and CPCV (6 groups,
+    2 test, 21 purge/embargo) with PBO < 0.20
+  causality: per-survivor truncation invariance and extra-lag checks
+  confirmation: independent event-loop replication of every finalist
+  bias_note: >
+    A PASS on this family is provisional at best because the panel excludes
+    delisted members; survivorship bias flatters the low-vol long leg less
+    than the high-vol end, but the direction of residual bias is positive.
+    A FAIL is definitive for this data tier.
+
+holdout:
+  policy: FORWARD_ONLY
+  start: '2026-07-19'
+  end: '2028-07-19'
+  note: >
+    No historical window is reserved; prior windows were analytically
+    observed by earlier campaigns. Interim looks are forbidden; a single
+    evaluation consumes it.
+  evaluator: net mean AND stationary-bootstrap CI lower bound > 0 (CI_V2)
+
+status: DECLARED_AWAITING_IMPLEMENTATION
+live_capital: PAPER_ONLY

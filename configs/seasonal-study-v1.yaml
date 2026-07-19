@@ -1,0 +1,69 @@
+# PREREGISTRATION — committed before any evaluation of this family is run.
+# Any change to this file after the first evaluation is a NEW campaign; the
+# original declaration stays in git history as the binding record.
+campaign_id: seasonal-study-v1-20260719-001
+declared_on: '2026-07-19'
+revision_context: ORIGINAL_PREREGISTRATION_NO_EVALUATION_RUN
+
+motivation:
+  source_evidence: >
+    The trend/TSMOM family failed its gauntlet, but its cost profile
+    (a handful of month-end flips per year) was validated as negligible.
+    The Halloween strategy trades exactly twice a year at month-end closes,
+    the lowest-turnover calendar rule in the documented anomaly literature.
+  literature:
+    - Bouman, Jacobsen (2002) — the Halloween indicator, "Sell in May"
+    - Jacobsen, Visaltanachoti (2009) — the Halloween effect differs across
+      US industries, stronger in production sectors than consumer sectors
+    - Andrade, Chhaochharia, Fuerst (2013) — post-publication persistence
+  economic_rationale: >
+    Vacation-driven seasonal variation in risk appetite and institutional
+    flows produces a summer/winter return differential; industry exposure
+    modulates the effect, so per-sector trials are declared separately.
+
+declared_family:
+  # 9 real trials; every one is evaluated, reported, and counted. Placebo
+  # controls (SHUFFLED_DATE and MATCHED_RANDOM, two per real trial) extend
+  # the accounting family to 27.
+  instruments: [SPY, QQQ, IWM, XLK, XLF, XLE, XLV, XLY, XLI]
+  signals:
+    - halloween          # long November through April, cash May through October
+  direction: LONG_ONLY_VS_CASH
+  short_side_excluded_reason: index shorts die to financing and borrow costs
+  rebalance: month-end close only (MOC); enter at the final October close,
+    exit at the final April close; no intramonth trading of any kind
+  real_trial_count: 9
+  placebo_controls_per_trial: 2
+  accounting_family_size: 27
+
+execution_contract:
+  entry_exit: MOC on the final session of October (enter) and the final
+    session of April (exit); decision frozen 15:45 America/New_York
+  costs: >
+    Full declared cost model per FLIP only (half-spread per fill, base
+    slippage, square-root impact at $100k capital, turnover penalty), plus
+    the preregistered 0.5x/1x/2x/4x sensitivity ladder. Cash earns zero.
+
+validation_protocol:
+  discovery_thresholds: LITERATURE_V2 (directed HAC t >= 3.8 on the
+    timing-minus-nothing net stream, BH q 0.05, DSR >= 0.95 at the accounting
+    family size 27, Romano-Wolf alpha 0.05, White/Hansen family p < 0.05)
+  risk_report: Sharpe, max drawdown, and terminal wealth versus buy-and-hold
+    are REPORTED for every trial; they are context, not gates
+  oos: expanding walk-forward (5y min train, 1y test) and CPCV (6 groups,
+    2 test, 21 purge/embargo) with PBO < 0.20
+  causality: per-survivor truncation invariance and extra-lag checks
+  confirmation: independent event-loop replication of every finalist
+
+holdout:
+  policy: FORWARD_ONLY
+  start: '2026-07-19'
+  end: '2028-07-19'
+  note: >
+    No historical window is reserved; prior windows were analytically
+    observed by earlier campaigns. Interim looks are forbidden; a single
+    evaluation consumes it.
+  evaluator: net mean AND stationary-bootstrap CI lower bound > 0 (CI_V2)
+
+status: DECLARED_AWAITING_IMPLEMENTATION
+live_capital: PAPER_ONLY

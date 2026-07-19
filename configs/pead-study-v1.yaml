@@ -1,0 +1,27 @@
+# DECLARATION OF A BLOCKED FAMILY — no campaign identifier is consumed.
+# Post-earnings announcement drift (PEAD) was considered for the 2026-07-19
+# study round and is formally NOT TESTABLE on the current data tier.
+family: pead-study-v1
+declared_on: '2026-07-19'
+status: BLOCKED_DATA_UNAVAILABLE
+
+reason: >
+  PEAD requires timestamp-aligned historical earnings announcement dates and
+  analyst consensus per name. The engine already carries the causal SUE
+  feature (edgestack/features/cross_sectional.py
+  standardized_unexpected_earnings) and the hypothesis stub
+  (edgestack/hypotheses/grid.py), but no free provider in the declared data
+  chain supplies point-in-time announcement timestamps or consensus history.
+  Scraping approximate dates retroactively would fabricate the very
+  timestamps the causality gates exist to protect, so the family is blocked
+  rather than approximated.
+
+unblock_condition: >
+  A credentialed point-in-time earnings feed (announcement timestamp,
+  actual, consensus) with a documented revision policy. On acquisition,
+  preregister a NEW config with its own campaign id; this file stays as the
+  record of why the family was not run earlier.
+
+literature:
+  - Ball, Brown (1968); Bernard, Thomas (1989) — the original PEAD evidence
+  - Chordia, Goyal, Sadka, Sadka, Shivakumar (2009) — liquidity and PEAD
