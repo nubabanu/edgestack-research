@@ -43,8 +43,9 @@ or closed.
     closed failures: `trend_study.py`, `vix_study.py`, `overnight_study.py`,
     `seasonal_study.py`, `lowvol_study.py`, `pairs_study.py`, `pead_study.py`,
     `momentum_xs_study.py`, `high52_study.py`, `volshock_study.py`,
-    `preholiday_study.py` (see `docs/study-round-2026-07-19.md` and
-    `docs/study-round-2026-07-19b-menu.md`)
+    `preholiday_study.py`, `seasonal_intl_study.py`, `tom_intl_study.py`
+    (see `docs/study-round-2026-07-19.md`, `docs/study-round-2026-07-19b-menu.md`,
+    and `docs/study-round-2026-07-19c-intl.md`)
   - `stats/`, `validation/`, `backtest/`, `evaluation/`, `scoring/`, `pipeline/` —
     the gauntlet: HAC t-tests, stationary bootstrap, FDR, deflated Sharpe, SPA,
     CPCV/PBO, walk-forward, decay, holdout ceremony
