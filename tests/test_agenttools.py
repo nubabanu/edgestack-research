@@ -62,6 +62,7 @@ def test_describe_lists_every_command() -> None:
         "oil",
         "gates",
         "leverage-check",
+        "entry-check",
     }
     assert "honesty_contract" in payload
 
@@ -201,6 +202,45 @@ def test_leverage_check_flags_tiny_samples(
     payload = _invoke(["leverage-check", "MU", "--horizon", "60"])
     # 260 sessions leave almost no complete windows after the SMA200 warmup.
     assert payload["conditions"]["any_entry"]["status"] == "TOO_FEW_ENTRIES"
+
+
+def test_entry_state_reports_regime_and_dip(ohlc_bars: pd.DataFrame) -> None:
+    state = agenttools.entry_state(ohlc_bars, "MU")
+    assert set(state) >= {
+        "calm_regime",
+        "dip",
+        "trend_above_ma200",
+        "vol20_annualized",
+        "rsi2",
+        "ibs",
+        "three_down_days",
+    }
+    # Planted three-down-days tail forces a dip verdict.
+    forced = ohlc_bars.copy()
+    closes = forced["close"].to_numpy().copy()
+    closes[-3:] = closes[-4] * np.array([0.99, 0.98, 0.97])
+    forced["close"] = closes
+    forced["adjusted_close"] = closes
+    state_dip = agenttools.entry_state(forced, "MU")
+    assert state_dip["three_down_days"] is True
+    assert state_dip["dip"] is True
+
+
+def test_earnings_estimate_projects_quarterly_cadence(tmp_path: Path) -> None:
+    out = tmp_path / "artifacts" / "earnings"
+    out.mkdir(parents=True)
+    dates = pd.date_range("2024-01-25", periods=8, freq="91D", tz="UTC")
+    pd.DataFrame(
+        {"symbol": "EPAM", "acceptance": [d.isoformat() for d in dates]}
+    ).to_parquet(out / "announcements.parquet", index=False)
+    estimate = agenttools._earnings_estimate("EPAM", tmp_path)
+    assert estimate["status"] == "EARNINGS_WINDOW_ESTIMATED_NOT_CONFIRMED"
+    assert estimate["median_gap_days"] == 91
+    assert (
+        estimate["window_start"] < estimate["estimated_next"] < estimate["window_end"]
+    )
+    missing = agenttools._earnings_estimate("ACN", tmp_path)
+    assert missing["status"] == "NOT_AVAILABLE"
 
 
 def test_gates_and_oil_report_missing_stores(tmp_path: Path) -> None:

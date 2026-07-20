@@ -369,6 +369,19 @@ def describe() -> None:
                     "args": {"--campaign": "optional campaign id filter"},
                     "network": False,
                 },
+                "entry-check": {
+                    "args": {
+                        "SYMBOL": "any US ticker",
+                        "--sessions": "look-ahead sessions (default 42)",
+                        "--threshold-bp": "GOOD verdict threshold (default 15)",
+                    },
+                    "network": True,
+                    "returns": (
+                        "per-session GOOD/WAIT/CAUTION_EARNINGS verdicts fusing"
+                        " alignment, calm regime, dip state, and the estimated"
+                        " earnings window"
+                    ),
+                },
                 "leverage-check": {
                     "args": {
                         "SYMBOL": "any US ticker",
@@ -657,6 +670,154 @@ def _leverage_assessment(
             "ENTRY_RULES_MOVE_MEDIANS_NOT_PATH_RISK",
         ],
     }
+
+
+def entry_state(frame: Any, symbol: str) -> dict[str, Any]:
+    """Current regime and dip state for one symbol, latest session.
+
+    Same formulas the leverage study used: calm = close above the
+    200-session SMA with 20-session vol under 30%; dip = RSI(2) < 10, or
+    IBS < 0.2, or three consecutive down closes. Values describe the LAST
+    completed session only — path states are unknowable in advance.
+    """
+
+    import numpy as np
+
+    bars = (
+        frame.loc[frame["symbol"] == symbol.upper()].set_index("session").sort_index()
+    )
+    close = bars["close"].astype(float)
+    low = bars["low"].astype(float)
+    high = bars["high"].astype(float)
+    returns = bars["adjusted_close"].astype(float).pct_change()
+    sma200 = close.rolling(200, min_periods=200).mean()
+    vol20 = returns.rolling(20, min_periods=20).std() * np.sqrt(252.0)
+    delta = close.diff()
+    gain = delta.clip(lower=0).ewm(alpha=0.5, adjust=False).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=0.5, adjust=False).mean()
+    rsi2 = float((100.0 - 100.0 / (1.0 + gain / loss.replace(0.0, np.nan))).iloc[-1])
+    span = float(high.iloc[-1] - low.iloc[-1])
+    ibs = float((close.iloc[-1] - low.iloc[-1]) / span) if span > 0 else 0.5
+    down3 = bool((returns.iloc[-3:] < 0).all())
+    above_ma200 = bool(close.iloc[-1] > sma200.iloc[-1])
+    vol_now = float(vol20.iloc[-1])
+    dip = bool(rsi2 < 10.0 or ibs < 0.2 or down3)
+    return {
+        "as_of_session": str(bars.index.max().date()),
+        "trend_above_ma200": above_ma200,
+        "vol20_annualized": round(vol_now, 3),
+        "calm_regime": bool(above_ma200 and vol_now < 0.30),
+        "rsi2": round(rsi2, 1),
+        "ibs": round(ibs, 2),
+        "three_down_days": down3,
+        "dip": dip,
+    }
+
+
+def _earnings_estimate(symbol: str, root: Path) -> dict[str, Any]:
+    """Estimated next earnings window from the EDGAR 8-K 2.02 cadence.
+
+    An ESTIMATE, stamped as such — the true date is set by the company.
+    """
+
+    import numpy as np
+    import pandas as pd
+
+    path = root / "artifacts" / "earnings" / "announcements.parquet"
+    if not path.is_file():
+        return _not_available(
+            "no EDGAR announcements crawl; run"
+            " `python -m edgestack.data.edgar_earnings`"
+        )
+    table = pd.read_parquet(path, columns=["symbol", "acceptance"])
+    mine = table.loc[table["symbol"] == symbol.upper()]
+    if len(mine) < 4:
+        return _not_available(f"too few 8-K 2.02 filings for {symbol.upper()}")
+    dates = (
+        pd.to_datetime(mine["acceptance"], utc=True)
+        .dt.tz_convert("America/New_York")
+        .dt.normalize()
+        .dt.tz_localize(None)
+        .sort_values()
+        .drop_duplicates()
+    )
+    gaps = dates.diff().dropna().dt.days
+    quarterly = gaps[(gaps > 60) & (gaps < 130)]
+    median_gap = float(np.median(quarterly)) if len(quarterly) else 91.0
+    estimated = dates.iloc[-1] + pd.Timedelta(days=round(median_gap))
+    return {
+        "status": "EARNINGS_WINDOW_ESTIMATED_NOT_CONFIRMED",
+        "last_announcement": str(dates.iloc[-1].date()),
+        "median_gap_days": round(median_gap),
+        "estimated_next": str(estimated.date()),
+        "window_start": str((estimated - pd.Timedelta(days=7)).date()),
+        "window_end": str((estimated + pd.Timedelta(days=7)).date()),
+    }
+
+
+@app.command("entry-check")
+def entry_check_command(
+    symbol: Annotated[str, typer.Argument(help="Ticker, e.g. EPAM.")],
+    sessions: Annotated[int, typer.Option("--sessions", min=5, max=252)] = 42,
+    threshold_bp: Annotated[float, typer.Option("--threshold-bp", min=0.0)] = 15.0,
+    years: Annotated[int, typer.Option("--years", min=2, max=60)] = 20,
+    root: Annotated[Path, typer.Option("--root", file_okay=False)] = Path("."),
+) -> None:
+    """Fused entry verdicts: alignment + regime + dip + estimated earnings."""
+
+    def _build() -> dict[str, Any]:
+        from edgestack.disclaimer import DISCLAIMER
+
+        base = root.resolve()
+        frame, warnings = _fetch_bars(symbol, years)
+        report = _advise_report(
+            symbol, years=years, sessions=sessions, buy_date=None, root=base
+        )
+        now = entry_state(frame, symbol)
+        earnings = _guarded(lambda: _earnings_estimate(symbol, base))
+        window_start = earnings.get("window_start")
+        window_end = earnings.get("window_end")
+        upcoming = []
+        for row in report["alignment"]["calendar"]:
+            session = str(row["session"])
+            expected = float(row.get("expected_daily_bp") or 0.0)
+            in_window = bool(
+                window_start and window_end and window_start <= session <= window_end
+            )
+            if in_window:
+                verdict = "CAUTION_EARNINGS"
+            elif expected >= threshold_bp:
+                verdict = "GOOD"
+            else:
+                verdict = "WAIT"
+            upcoming.append(
+                {
+                    "session": session,
+                    "weekday": row.get("weekday"),
+                    "expected_daily_bp": round(expected, 2),
+                    "win_score_0_100": row.get("win_score_0_100"),
+                    "verdict": verdict,
+                }
+            )
+        return {
+            "status": "DIAGNOSTIC_NOT_A_VALIDATED_EDGE_NOT_AN_ORDER",
+            "symbol": symbol.upper(),
+            "now": now,
+            "regime_note": (
+                "calm regime — normal entry rules apply"
+                if now["calm_regime"]
+                else "NO_CALM_REGIME: below 200-DMA or elevated vol; entries"
+                " here historically carry the widest downside paths"
+            ),
+            "earnings": earnings,
+            "threshold_bp": threshold_bp,
+            "upcoming": upcoming,
+            "best_upcoming": [u for u in upcoming if u["verdict"] == "GOOD"][:5],
+            "provenance_warnings": list(warnings),
+            "disclaimer": DISCLAIMER,
+        }
+
+    _emit(_guarded(_build))
 
 
 @app.command("leverage-check")
