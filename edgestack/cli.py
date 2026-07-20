@@ -382,14 +382,42 @@ def post_close(
     console.print_json(data=summary)
 
 
+@app.command("pre-close-check")
+def pre_close_check(
+    symbols: Annotated[
+        str,
+        typer.Option("--symbols", help="Comma-separated calendar symbols."),
+    ] = "SPY,QQQ,GLD,ACN,CTSH,EPAM",
+) -> None:
+    """Pre-close heads-up: today's entry signals, ~15 min before the freeze.
+
+    Reads the calendars the nightly job published, applies the same
+    threshold and earnings-window rules, and pushes one Telegram message.
+    Clean silent skip on non-sessions or missing credentials.
+    """
+
+    from edgestack.live.preclose import run_pre_close_check
+
+    summary = run_pre_close_check(
+        symbols=tuple(
+            symbol.strip().upper() for symbol in symbols.split(",") if symbol.strip()
+        )
+    )
+    console.print_json(data=summary)
+
+
 @app.command("tailwind-calendar")
 def tailwind_calendar(
-    symbol: Annotated[str, typer.Option("--symbol", help="Ticker, e.g. SPY, QQQ, GLD, USO.")],
+    symbol: Annotated[
+        str, typer.Option("--symbol", help="Ticker, e.g. SPY, QQQ, GLD, USO.")
+    ],
     sessions: Annotated[int, typer.Option("--sessions", min=5, max=252)] = 63,
     years: Annotated[int, typer.Option("--years", min=2, max=60)] = 20,
     bars: Annotated[
         Path | None,
-        typer.Option("--bars", exists=True, dir_okay=False, help="Offline bars parquet."),
+        typer.Option(
+            "--bars", exists=True, dir_okay=False, help="Offline bars parquet."
+        ),
     ] = None,
     output: Annotated[
         Path | None,
@@ -470,9 +498,7 @@ def universe_pit_audit(
     config: Annotated[
         Path, typer.Option("--config", exists=True, dir_okay=False)
     ] = Path("configs/full.yaml"),
-    start: Annotated[
-        str, typer.Option("--start", metavar="YYYY-MM-DD")
-    ] = "1996-01-01",
+    start: Annotated[str, typer.Option("--start", metavar="YYYY-MM-DD")] = "1996-01-01",
     end: Annotated[str | None, typer.Option("--end", metavar="YYYY-MM-DD")] = None,
     output: Annotated[
         Path | None,
@@ -624,13 +650,14 @@ def oil_context(
     expires: Annotated[
         str,
         typer.Option(
-            "--expires", help="Timezone-aware ISO expiry, for example 2026-07-20T17:00-04:00."
+            "--expires",
+            help="Timezone-aware ISO expiry, for example 2026-07-20T17:00-04:00.",
         ),
     ],
     note: Annotated[str, typer.Option("--note")] = "",
-    artifacts: Annotated[
-        Path, typer.Option("--artifacts", file_okay=False)
-    ] = Path("artifacts"),
+    artifacts: Annotated[Path, typer.Option("--artifacts", file_okay=False)] = Path(
+        "artifacts"
+    ),
 ) -> None:
     """Record short-lived manual spread, financing, and event-risk context."""
 
@@ -641,7 +668,9 @@ def oil_context(
 
     normalized_risk = event_risk.strip().upper()
     if normalized_risk not in {"NORMAL", "ELEVATED", "EXTREME", "UNKNOWN"}:
-        raise typer.BadParameter("expected NORMAL, ELEVATED, EXTREME, or UNKNOWN", param_hint="--event-risk")
+        raise typer.BadParameter(
+            "expected NORMAL, ELEVATED, EXTREME, or UNKNOWN", param_hint="--event-risk"
+        )
     expiry = _parse_iso_datetime(expires, "--expires")
     now = datetime.now(UTC)
     context = OilContext(
@@ -659,7 +688,8 @@ def oil_context(
 @app.command("oil-decision")
 def oil_decision(
     paper_equity: Annotated[
-        float, typer.Option("--paper-equity", min=0.01, help="Current paper equity in USD.")
+        float,
+        typer.Option("--paper-equity", min=0.01, help="Current paper equity in USD."),
     ],
     as_of: Annotated[
         str | None,
@@ -671,9 +701,9 @@ def oil_decision(
     config: Annotated[
         Path, typer.Option("--config", exists=True, dir_okay=False)
     ] = Path("configs/oil-paper-v1.yaml"),
-    artifacts: Annotated[
-        Path, typer.Option("--artifacts", file_okay=False)
-    ] = Path("artifacts"),
+    artifacts: Annotated[Path, typer.Option("--artifacts", file_okay=False)] = Path(
+        "artifacts"
+    ),
 ) -> None:
     """Emit and append one paper-only oil snapshot; never contact a broker."""
 
@@ -704,9 +734,9 @@ def oil_decision(
 @app.command("oil-scorecard")
 def oil_scorecard(
     campaign: Annotated[str, typer.Option("--campaign")],
-    artifacts: Annotated[
-        Path, typer.Option("--artifacts", file_okay=False)
-    ] = Path("artifacts"),
+    artifacts: Annotated[Path, typer.Option("--artifacts", file_okay=False)] = Path(
+        "artifacts"
+    ),
 ) -> None:
     """Replay the append-only oil campaign scorecard without network access."""
 
@@ -725,9 +755,9 @@ def oil_paper_mark(
     price: Annotated[float, typer.Option("--price", min=0.000001)],
     units: Annotated[float, typer.Option("--units", min=0)],
     available_at: Annotated[str, typer.Option("--available-at")],
-    artifacts: Annotated[
-        Path, typer.Option("--artifacts", file_okay=False)
-    ] = Path("artifacts"),
+    artifacts: Annotated[Path, typer.Option("--artifacts", file_okay=False)] = Path(
+        "artifacts"
+    ),
 ) -> None:
     """Append an optional manual eToro paper mark; this is never an order."""
 
@@ -752,9 +782,9 @@ def oil_schedule(
     config: Annotated[
         Path, typer.Option("--config", exists=True, dir_okay=False)
     ] = Path("configs/oil-paper-v1.yaml"),
-    artifacts: Annotated[
-        Path, typer.Option("--artifacts", file_okay=False)
-    ] = Path("artifacts"),
+    artifacts: Annotated[Path, typer.Option("--artifacts", file_okay=False)] = Path(
+        "artifacts"
+    ),
 ) -> None:
     """Run the four fixed ET oil-paper refreshes until interrupted."""
 

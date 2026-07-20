@@ -233,6 +233,40 @@ async def crawl(symbols: Sequence[str], *, root: str | Path = ".") -> dict[str, 
     return manifest
 
 
+def fetch_latest_announcement(symbol: str) -> dict[str, Any] | None:
+    """Newest 8-K Item 2.02 for one symbol, live from EDGAR (two requests).
+
+    Used by the nightly window-open check; returns None when the symbol has
+    no CIK or no qualifying filings. Same row schema as the sealed crawl.
+    """
+
+    import httpx
+
+    headers = {"User-Agent": _USER_AGENT, "Accept-Encoding": "gzip, deflate"}
+    ticker = symbol.upper().replace(".", "-")
+    with httpx.Client(headers=headers, timeout=30.0) as client:
+        tickers = client.get(_TICKERS_URL)
+        tickers.raise_for_status()
+        cik = next(
+            (
+                int(row["cik_str"])
+                for row in tickers.json().values()
+                if str(row["ticker"]).upper().replace(".", "-") == ticker
+            ),
+            None,
+        )
+        if cik is None:
+            return None
+        response = client.get(_SUBMISSIONS_URL.format(cik=cik))
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        rows = _announcements_from_submissions(ticker, response.json())
+    if not rows:
+        return None
+    return max(rows, key=lambda row: str(row["acceptance"]))
+
+
 def load_events(root: str | Path = ".") -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load the crawled announcement and EPS tables (raises if absent)."""
 

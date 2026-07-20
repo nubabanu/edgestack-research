@@ -369,6 +369,11 @@ def describe() -> None:
                     "args": {"--campaign": "optional campaign id filter"},
                     "network": False,
                 },
+                "telegram-test": {
+                    "args": {},
+                    "network": True,
+                    "returns": "SENT / SKIPPED_NO_CREDENTIALS with setup steps",
+                },
                 "entry-check": {
                     "args": {
                         "SYMBOL": "any US ticker",
@@ -723,13 +728,21 @@ def _earnings_estimate(symbol: str, root: Path) -> dict[str, Any]:
     import numpy as np
     import pandas as pd
 
-    path = root / "artifacts" / "earnings" / "announcements.parquet"
-    if not path.is_file():
+    earnings_dir = root / "artifacts" / "earnings"
+    tables = [
+        pd.read_parquet(path, columns=["symbol", "acceptance"])
+        for path in (
+            earnings_dir / "announcements.parquet",
+            earnings_dir / "live-announcements.parquet",  # nightly append-only
+        )
+        if path.is_file()
+    ]
+    if not tables:
         return _not_available(
             "no EDGAR announcements crawl; run"
             " `python -m edgestack.data.edgar_earnings`"
         )
-    table = pd.read_parquet(path, columns=["symbol", "acceptance"])
+    table = pd.concat(tables, ignore_index=True)
     mine = table.loc[table["symbol"] == symbol.upper()]
     if len(mine) < 4:
         return _not_available(f"too few 8-K 2.02 filings for {symbol.upper()}")
@@ -753,6 +766,52 @@ def _earnings_estimate(symbol: str, root: Path) -> dict[str, Any]:
         "window_start": str((estimated - pd.Timedelta(days=7)).date()),
         "window_end": str((estimated + pd.Timedelta(days=7)).date()),
     }
+
+
+@app.command("telegram-test")
+def telegram_test_command() -> None:
+    """Send one test push through the configured Telegram credentials."""
+
+    def _build() -> dict[str, Any]:
+        import os
+        from datetime import UTC, datetime
+
+        token = os.environ.get("EDGESTACK_TELEGRAM_TOKEN", "").strip()
+        chat = os.environ.get("EDGESTACK_TELEGRAM_CHAT", "").strip()
+        if not token or not chat:
+            return {
+                "status": "SKIPPED_NO_CREDENTIALS",
+                "setup": [
+                    "1. In Telegram, message @BotFather -> /newbot -> copy the token",
+                    "2. Message your new bot once (any text), then open"
+                    " https://api.telegram.org/bot<TOKEN>/getUpdates and copy"
+                    " your chat id",
+                    '3. setx EDGESTACK_TELEGRAM_TOKEN "<token>"',
+                    '4. setx EDGESTACK_TELEGRAM_CHAT "<chat id>"',
+                    "5. Open a NEW terminal and re-run telegram-test",
+                ],
+            }
+        from edgestack.live.notify import TelegramChannel
+        from edgestack.models import AlertEvent
+
+        now = datetime.now(UTC)
+        event = AlertEvent(
+            event_id=f"telegram-test-{now:%Y%m%d%H%M%S}",
+            recommendation_id="telegram-test",
+            revision=1,
+            event_type="TEST",
+            message=(
+                "EdgeStack telegram-test: alerts are wired to this chat."
+                " PAPER ONLY - not financial advice."
+            ),
+            created_at=now,
+        )
+        receipt = asyncio.run(
+            TelegramChannel(token=token, chat_id=chat).send(event, event.event_id)
+        )
+        return {"status": "SENT", "receipt": str(receipt)}
+
+    _emit(_guarded(_build))
 
 
 @app.command("entry-check")

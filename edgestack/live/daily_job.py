@@ -304,6 +304,7 @@ def entry_signal_line(
     earnings_window: tuple[str, str] | None,
     *,
     threshold_bp: float = 15.0,
+    peers_note: str | None = None,
 ) -> str | None:
     """One diagnostic alert line when tomorrow clears the alignment bar.
 
@@ -318,9 +319,10 @@ def entry_signal_line(
     if earnings_window and earnings_window[0] <= session <= earnings_window[1]:
         return None
     dip_note = "yes" if dip else ("no" if dip is not None else "unknown")
+    peers = f" {peers_note}" if peers_note else ""
     return (
         f"ENTRY_SIGNAL (diagnostic): {symbol} {calendar_row.get('weekday', '?')}"
-        f" {session} ~{expected:.0f}bp regime={trend_state} dip={dip_note}"
+        f" {session} ~{expected:.0f}bp regime={trend_state} dip={dip_note}{peers}"
     )
 
 
@@ -422,6 +424,15 @@ def run_post_close(
     advisor_dir.mkdir(parents=True, exist_ok=True)
     calendars: dict[str, str] = {}
     entry_signals: list[str] = []
+    peers_note: str | None = None
+    try:  # peer context is best-effort color, never load-bearing
+        from edgestack.live.preclose import IT_SERVICES_PEERS, peers_healing
+
+        healing, total_peers = peers_healing(panel, IT_SERVICES_PEERS)
+        if total_peers:
+            peers_note = f"[peers healing: {healing}/{total_peers}]"
+    except Exception:
+        pass
     for symbol in calendar_symbols:
         frame = calendar_panel.get(symbol)
         if frame is None:
@@ -467,12 +478,17 @@ def run_post_close(
                     )
                     long_frame = frame.assign(symbol=symbol)
                     state = entry_state(long_frame, symbol)
+                    from edgestack.live.preclose import IT_SERVICES_PEERS
+
                     line = entry_signal_line(
                         symbol,
                         upcoming[0],
                         str(report["current_year_context"]["trend_state"]),
                         state["dip"],
                         window,
+                        peers_note=(
+                            peers_note if symbol in IT_SERVICES_PEERS else None
+                        ),
                     )
                     if line:
                         entry_signals.append(line)
@@ -480,6 +496,47 @@ def run_post_close(
                 pass
         except Exception as error:  # a calendar failure must not kill the scan
             calendars[symbol] = f"FAILED: {error}"
+    try:  # window-open detection is best-effort; failures never break the scan
+        from edgestack.data.edgar_earnings import fetch_latest_announcement
+
+        earnings_dir = base / "artifacts" / "earnings"
+        live_path = earnings_dir / "live-announcements.parquet"
+        known: set[tuple[str, str]] = set()
+        live_existing: pd.DataFrame | None = None
+        for path in (earnings_dir / "announcements.parquet", live_path):
+            if path.is_file():
+                table = pd.read_parquet(path)
+                if path == live_path:
+                    live_existing = table
+                known |= set(
+                    zip(
+                        table["symbol"].astype(str),
+                        table["acceptance"].astype(str),
+                        strict=True,
+                    )
+                )
+        fresh_rows: list[dict[str, Any]] = []
+        for symbol in calendar_symbols:
+            if symbol in {"SPY", "QQQ", "GLD"}:
+                continue
+            latest = fetch_latest_announcement(symbol)
+            if latest and (symbol, str(latest["acceptance"])) not in known:
+                fresh_rows.append(latest)
+                entry_signals.append(
+                    f"EARNINGS_PRINTED: {symbol} 8-K 2.02 accepted"
+                    f" {latest['acceptance']} — estimated blackout lifted,"
+                    " entry rules re-armed"
+                )
+        if fresh_rows:
+            frames_to_join = ([live_existing] if live_existing is not None else []) + [
+                pd.DataFrame(fresh_rows)
+            ]
+            earnings_dir.mkdir(parents=True, exist_ok=True)
+            pd.concat(frames_to_join, ignore_index=True).to_parquet(
+                live_path, index=False
+            )
+    except Exception:
+        pass
     summary = {
         "as_of": as_of.isoformat(),
         "signal_written": wrote_signal,
