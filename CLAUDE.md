@@ -124,7 +124,10 @@ Other key CLI commands (`edgestack ...` or `python -m edgestack.cli ...`):
 
 ## Live system
 
-`scripts/post-close-job.ps1` (scheduled nightly) runs `post-close`, which writes
+Three scheduled tasks (`scripts/install-autostart.ps1`): the mobile API at
+logon, `pre-close-check.ps1` weekdays ~15:35 ET (heads-up Telegram push before
+the MOC decision freeze; see `docs/live-alerts.md`), and the nightly job:
+`scripts/post-close-job.ps1` runs `post-close`, which writes
 `artifacts/advisor/tailwind-calendar-<SYMBOL>.json` for each calendar symbol
 (default `SPY,QQQ,GLD,ACN,CTSH` — defined in `edgestack/cli.py` and
 `edgestack/live/daily_job.py:run_post_close`). `edgestack/mobile/service.py`

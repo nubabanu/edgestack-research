@@ -63,6 +63,7 @@ def test_describe_lists_every_command() -> None:
         "gates",
         "leverage-check",
         "entry-check",
+        "telegram-test",
     }
     assert "honesty_contract" in payload
 
@@ -241,6 +242,33 @@ def test_earnings_estimate_projects_quarterly_cadence(tmp_path: Path) -> None:
     )
     missing = agenttools._earnings_estimate("ACN", tmp_path)
     assert missing["status"] == "NOT_AVAILABLE"
+
+
+def test_telegram_test_skips_cleanly_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("EDGESTACK_TELEGRAM_TOKEN", raising=False)
+    monkeypatch.delenv("EDGESTACK_TELEGRAM_CHAT", raising=False)
+    payload = _invoke(["telegram-test"])
+    assert payload["status"] == "SKIPPED_NO_CREDENTIALS"
+    assert any("BotFather" in step for step in payload["setup"])
+
+
+def test_earnings_estimate_includes_live_announcements(tmp_path: Path) -> None:
+    out = tmp_path / "artifacts" / "earnings"
+    out.mkdir(parents=True)
+    # 21:30 UTC = 16:30/17:30 New York — same calendar date after conversion.
+    sealed = pd.date_range("2024-01-25 21:30", periods=8, freq="91D", tz="UTC")
+    pd.DataFrame(
+        {"symbol": "EPAM", "acceptance": [d.isoformat() for d in sealed]}
+    ).to_parquet(out / "announcements.parquet", index=False)
+    fresh = sealed[-1] + pd.Timedelta(days=91)
+    pd.DataFrame({"symbol": "EPAM", "acceptance": [fresh.isoformat()]}).to_parquet(
+        out / "live-announcements.parquet", index=False
+    )
+    estimate = agenttools._earnings_estimate("EPAM", tmp_path)
+    # The live print rolls the projection one quarter forward.
+    assert estimate["last_announcement"] == str(fresh.date())
 
 
 def test_gates_and_oil_report_missing_stores(tmp_path: Path) -> None:
