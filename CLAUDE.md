@@ -105,6 +105,7 @@ python -m edgestack.agenttools advise ACN --buy-date 2026-07-28
 python -m edgestack.agenttools compare ACN,CTSH,SPY
 python -m edgestack.agenttools calendar CTSH --publish   # feeds the Android app
 python -m edgestack.agenttools leverage-check MU --leverage 5   # liquidation math
+python -m edgestack.agenttools entry-check EPAM   # fused entry verdicts + earnings window
 ```
 
 Other key CLI commands (`edgestack ...` or `python -m edgestack.cli ...`):

@@ -125,9 +125,7 @@ def build_signal_payload(
     entry_session = upcoming[0]
     exit_session = upcoming[_HOLDING_SESSIONS]
     candidates = []
-    for rank, (symbol, (trailing, close, atr)) in enumerate(
-        ordered[:_TOP_K], start=1
-    ):
+    for rank, (symbol, (trailing, close, atr)) in enumerate(ordered[:_TOP_K], start=1):
         percentile = float((universe_moves > trailing).mean())
         identity = canonical_sha256(
             {"symbol": symbol, "session": as_of.isoformat(), "rank": rank}
@@ -231,11 +229,15 @@ def build_signal_payload(
     }
 
 
-def _close_on(panel: dict[str, pd.DataFrame], symbol: str, session: str) -> float | None:
+def _close_on(
+    panel: dict[str, pd.DataFrame], symbol: str, session: str
+) -> float | None:
     frame = panel.get(symbol)
     if frame is None:
         return None
-    rows = frame[pd.to_datetime(frame["session"]).dt.date == date.fromisoformat(session)]
+    rows = frame[
+        pd.to_datetime(frame["session"]).dt.date == date.fromisoformat(session)
+    ]
     if rows.empty:
         return None
     return float(rows["adjusted_close"].iloc[-1])
@@ -260,15 +262,21 @@ def update_forward_ledger(
             fill_price = _close_on(panel, symbol, entry)
             if fill_price is not None:
                 if ledger.record_event(
-                    recommendation, symbol=symbol, event="FILL",
-                    session=entry, price=fill_price,
+                    recommendation,
+                    symbol=symbol,
+                    event="FILL",
+                    session=entry,
+                    price=fill_price,
                 ):
                     counts["fills"] += 1
             if exit_ <= as_of.isoformat():
                 exit_price = _close_on(panel, symbol, exit_)
                 if exit_price is not None and ledger.record_event(
-                    recommendation, symbol=symbol, event="EXIT",
-                    session=exit_, price=exit_price,
+                    recommendation,
+                    symbol=symbol,
+                    event="EXIT",
+                    session=exit_,
+                    price=exit_price,
                 ):
                     counts["exits"] += 1
             elif entry < as_of.isoformat():
@@ -277,19 +285,50 @@ def update_forward_ledger(
                     mark_price is not None
                     and calendar.is_session(as_of)
                     and ledger.record_event(
-                        recommendation, symbol=symbol, event="MARK",
-                        session=as_of.isoformat(), price=mark_price,
+                        recommendation,
+                        symbol=symbol,
+                        event="MARK",
+                        session=as_of.isoformat(),
+                        price=mark_price,
                     )
                 ):
                     counts["marks"] += 1
     return counts
 
 
+def entry_signal_line(
+    symbol: str,
+    calendar_row: dict[str, Any],
+    trend_state: str,
+    dip: bool | None,
+    earnings_window: tuple[str, str] | None,
+    *,
+    threshold_bp: float = 15.0,
+) -> str | None:
+    """One diagnostic alert line when tomorrow clears the alignment bar.
+
+    Suppressed inside an estimated earnings window — the dominant
+    single-name path hazard outweighs any calendar tailwind.
+    """
+
+    expected = float(calendar_row.get("expected_daily_bp") or 0.0)
+    if expected < threshold_bp:
+        return None
+    session = str(calendar_row.get("session", ""))
+    if earnings_window and earnings_window[0] <= session <= earnings_window[1]:
+        return None
+    dip_note = "yes" if dip else ("no" if dip is not None else "unknown")
+    return (
+        f"ENTRY_SIGNAL (diagnostic): {symbol} {calendar_row.get('weekday', '?')}"
+        f" {session} ~{expected:.0f}bp regime={trend_state} dip={dip_note}"
+    )
+
+
 def run_post_close(
     *,
     root: str | Path = ".",
     campaign_id: str = DEFAULT_CAMPAIGN,
-    calendar_symbols: tuple[str, ...] = ("SPY", "QQQ", "GLD", "ACN", "CTSH"),
+    calendar_symbols: tuple[str, ...] = ("SPY", "QQQ", "GLD", "ACN", "CTSH", "EPAM"),
 ) -> dict[str, Any]:
     """Run the complete nightly loop; every step is idempotent per session."""
 
@@ -337,15 +376,11 @@ def run_post_close(
         for item in open_signal["payload"]["candidates"]
     }
     fetch_symbols = tuple(sorted(set(equities) | ledger_symbols))
-    panel = asyncio.run(
-        _fetch_panel(fetch_symbols, as_of - timedelta(days=120), as_of)
-    )
+    panel = asyncio.run(_fetch_panel(fetch_symbols, as_of - timedelta(days=120), as_of))
     # Calendar symbols need deep history for the advisor's conditional
     # statistics; a few long series are cheap compared to the universe sweep.
     calendar_panel = asyncio.run(
-        _fetch_panel(
-            tuple(calendar_symbols), as_of - timedelta(days=365 * 20), as_of
-        )
+        _fetch_panel(tuple(calendar_symbols), as_of - timedelta(days=365 * 20), as_of)
     )
 
     signal_path = campaign_root / "live" / f"{as_of.isoformat()}-signal.json"
@@ -369,9 +404,7 @@ def run_post_close(
     else:
         import json as json_module
 
-        ledger.record_signal(
-            json_module.loads(signal_path.read_text(encoding="utf-8"))
-        )
+        ledger.record_signal(json_module.loads(signal_path.read_text(encoding="utf-8")))
 
     ledger_counts = update_forward_ledger(ledger, panel, as_of=as_of)
     scorecard = ledger.scorecard()
@@ -388,6 +421,7 @@ def run_post_close(
     advisor_dir = base / "artifacts" / "advisor"
     advisor_dir.mkdir(parents=True, exist_ok=True)
     calendars: dict[str, str] = {}
+    entry_signals: list[str] = []
     for symbol in calendar_symbols:
         frame = calendar_panel.get(symbol)
         if frame is None:
@@ -406,9 +440,12 @@ def run_post_close(
                 "provenance_warnings": report["provenance_warnings"],
                 "disclaimer": report["disclaimer"],
             }
-            text = json_module.dumps(
-                calendar_payload, indent=2, sort_keys=True, default=str
-            ) + "\n"
+            text = (
+                json_module.dumps(
+                    calendar_payload, indent=2, sort_keys=True, default=str
+                )
+                + "\n"
+            )
             (advisor_dir / f"tailwind-calendar-{symbol}.json").write_text(
                 text, encoding="utf-8"
             )
@@ -417,6 +454,30 @@ def run_post_close(
                     text, encoding="utf-8"
                 )
             calendars[symbol] = "OK"
+            try:  # a failed alert must not fail the calendar
+                from edgestack.agenttools import _earnings_estimate, entry_state
+
+                upcoming = report["alignment"]["calendar"]
+                if upcoming:
+                    estimate = _earnings_estimate(symbol, base)
+                    window = (
+                        (estimate["window_start"], estimate["window_end"])
+                        if "window_start" in estimate
+                        else None
+                    )
+                    long_frame = frame.assign(symbol=symbol)
+                    state = entry_state(long_frame, symbol)
+                    line = entry_signal_line(
+                        symbol,
+                        upcoming[0],
+                        str(report["current_year_context"]["trend_state"]),
+                        state["dip"],
+                        window,
+                    )
+                    if line:
+                        entry_signals.append(line)
+            except Exception:
+                pass
         except Exception as error:  # a calendar failure must not kill the scan
             calendars[symbol] = f"FAILED: {error}"
     summary = {
@@ -426,6 +487,7 @@ def run_post_close(
         "ledger": ledger_counts,
         "forward_scorecard": scorecard,
         "calendars": calendars,
+        "entry_signals": entry_signals,
         "universe_size": len(equities),
         "fetched": len(panel),
     }
@@ -458,17 +520,18 @@ def _notify_telegram(summary: dict[str, Any], signal_path: Path) -> str:
     try:
         payload = json_module.loads(signal_path.read_text(encoding="utf-8"))
         candidates = payload.get("candidates", [])
-        names = " ".join(
-            f"{item['symbol']}" for item in candidates
-        ) or "none"
+        names = " ".join(f"{item['symbol']}" for item in candidates) or "none"
         entry = payload.get("entry", {})
+        signal_lines = summary.get("entry_signals") or []
+        signals_block = ("\n" + "\n".join(signal_lines)) if signal_lines else ""
         message = (
             f"EdgeStack post-close {summary['as_of']}\n"
             f"Basket ({len(candidates)}): {names}\n"
             f"Entry MOC {entry.get('session', '?')} · submit by 15:45 ET\n"
             f"Exit MOC {payload.get('exit', {}).get('session', '?')}\n"
             f"Signal {'FRESH' if summary['signal_written'] else 'already existed'}"
-            f" · forward fills {summary['ledger']}\n"
+            f" · forward fills {summary['ledger']}"
+            f"{signals_block}\n"
             "PAPER ONLY · not financial advice · revalidate before the close"
         )
         event = AlertEvent(

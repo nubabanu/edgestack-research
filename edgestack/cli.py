@@ -361,7 +361,7 @@ def post_close(
             "--calendar-symbols",
             help="Comma-separated symbols for tailwind calendars.",
         ),
-    ] = "SPY,QQQ,GLD,ACN,CTSH",
+    ] = "SPY,QQQ,GLD,ACN,CTSH,EPAM",
 ) -> None:
     """Nightly post-close loop: fresh basket scan, forward ledger, calendars.
 
