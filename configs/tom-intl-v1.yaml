@@ -1,0 +1,77 @@
+# PREREGISTRATION — committed before any evaluation of this family is run.
+# Any change to this file after the first evaluation is a NEW campaign; the
+# original declaration stays in git history as the binding record.
+campaign_id: tom-intl-v1-20260719-001
+declared_on: '2026-07-19'
+revision_context: ORIGINAL_PREREGISTRATION_NO_EVALUATION_RUN
+
+motivation:
+  source_evidence: >
+    SPY turn-of-month is the program's flagship validated edge
+    (spy-tom-edge-v1-20260715-001, preholdout and single-use holdout both
+    PASS). This campaign asks the natural generalization question with the
+    IDENTICAL frozen window on instruments the validation never touched.
+  literature:
+    - McConnell, Xu (2008) — turn-of-month in 30 of 34 countries
+    - Lakonishok, Smidt (1988) — the original US evidence
+  economic_rationale: >
+    Month-end institutional flows (pension contributions, payroll
+    investment, portfolio rebalancing) are not US-specific; if the
+    mechanism is real it should appear in other developed markets.
+
+data_contract:
+  panel: >
+    Sealed via edgestack/data/intl_panel.py (free Stooq→Yahoo chain) to
+    artifacts/intl/bars.parquet with a SHA-256 manifest before evaluation.
+  watermarks:
+    - US_LISTED_WRAPPERS_EMBED_FX_AND_NYSE_LIQUIDITY
+    - SURVIVORSHIP_NOT_APPLICABLE_FIXED_ETF_LIST
+
+declared_family:
+  # 12 real trials; every one is evaluated, reported, and counted. Placebo
+  # controls (SHUFFLED_DATE and MATCHED_RANDOM, two per real trial) extend
+  # the accounting family to 36.
+  instruments: [EWG, EWU, EWQ, EWP, EWI, EWL, EWD, EWN, FEZ, EWY, EWJ, EWA]
+  signals:
+    - turn_of_month_last1_first3
+  frozen_rule_note: >
+    Identical to the validated SPY_TURN_OF_MONTH_LAST1_FIRST3 contract:
+    entry MOC on the session immediately before the final session of each
+    month; exposure on the final session and the first three sessions of
+    the next month; exit MOC on the third. NYSE calendar (these wrappers
+    trade on NYSE), deterministic, known in advance.
+  direction: LONG_ONLY_VS_CASH
+  short_side_excluded_reason: index shorts die to financing and borrow costs
+  rebalance: two MOC fills per month per instrument, nothing else
+  real_trial_count: 12
+  placebo_controls_per_trial: 2
+  accounting_family_size: 36
+
+execution_contract:
+  entry_exit: MOC fills at the declared entry and exit sessions; decision
+    frozen 15:45 America/New_York; the final partial month of a sample is
+    never traded
+  costs: >
+    Full declared cost model per FILL (two fills per monthly event) plus
+    the preregistered 0.5x/1x/2x/4x sensitivity ladder. Cash earns zero.
+
+validation_protocol:
+  discovery_thresholds: LITERATURE_V2 (directed HAC t >= 3.8, BH q 0.05,
+    DSR >= 0.95 at accounting family size 36, Romano-Wolf alpha 0.05,
+    White/Hansen family p < 0.05)
+  risk_report: Sharpe, max drawdown, terminal wealth vs buy-and-hold SPY
+    REPORTED for every trial; context, not gates
+  oos: expanding walk-forward (5y min train, 1y test) and CPCV (6 groups,
+    2 test, 21 purge/embargo) with PBO < 0.20
+  causality: per-survivor truncation invariance and extra-lag checks
+  confirmation: independent event-loop replication of every finalist
+
+holdout:
+  policy: FORWARD_ONLY
+  start: '2026-07-19'
+  end: '2028-07-19'
+  note: single-use; interim looks forbidden
+  evaluator: net mean AND stationary-bootstrap CI lower bound > 0 (CI_V2)
+
+status: DECLARED_AWAITING_IMPLEMENTATION
+live_capital: PAPER_ONLY
